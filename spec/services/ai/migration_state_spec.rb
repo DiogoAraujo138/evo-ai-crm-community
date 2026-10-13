@@ -88,6 +88,64 @@ RSpec.describe Ai::MigrationState do
     end
   end
 
+  describe 'the recorded migration' do
+    before { InstallationConfig.where(name: described_class::MIGRATED_FLAG).delete_all }
+
+    it 'keeps the install migrated after every imported credential is deleted' do
+      register(imported_from: Ai::CredentialMigration::INSTALLATION_SOURCE)
+      described_class.record_migration!
+      Ai::Credential.delete_all
+      with_legacy_global('sk-legacy-9999')
+
+      # Deletes are real now: the last imported row going away is not a vote
+      # to reopen the legacy key the operator thinks is retired.
+      expect(described_class).to be_migrated
+      expect(Ai::CredentialResolver.resolve_key(for_consumer: :inbox_assist)).to be_nil
+    end
+
+    it 'does not change a legacy install that never recorded a migration' do
+      with_legacy_global('sk-legacy-9999')
+
+      expect(described_class).not_to be_migrated
+    end
+
+    it 'only counts a record holding true' do
+      InstallationConfig.create!(name: described_class::MIGRATED_FLAG, value: false)
+      with_legacy_global('sk-legacy-9999')
+
+      expect(described_class).not_to be_migrated
+    end
+
+    it 'does not read the string "false" as a recorded migration' do
+      InstallationConfig.create!(name: described_class::MIGRATED_FLAG, value: 'false')
+      with_legacy_global('sk-legacy-9999')
+
+      expect(described_class).not_to be_migrated
+    end
+
+    it 'treats a failure reading the record as NOT migrated' do
+      allow(InstallationConfig).to receive(:find_by).and_raise(ActiveRecord::StatementInvalid, 'boom')
+      with_legacy_global('sk-legacy-9999')
+
+      expect(described_class).not_to be_migrated
+    end
+
+    it 'ignores an env var with the record name' do
+      with_legacy_global('sk-legacy-9999')
+      stub_const('ENV', ENV.to_h.merge(described_class::MIGRATED_FLAG => 'true'))
+
+      expect(described_class).not_to be_migrated
+    end
+
+    it 'writes the record once, locked, however often it is recorded' do
+      2.times { described_class.record_migration! }
+
+      records = InstallationConfig.where(name: described_class::MIGRATED_FLAG)
+      expect(records.count).to eq(1)
+      expect(records.first).to have_attributes(value: true, locked: true)
+    end
+  end
+
   describe 'the resolver honours the guard (AC3, AC4)' do
     it 'still serves the legacy key while the install has not migrated' do
       with_legacy_global('sk-legacy-9999')

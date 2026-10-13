@@ -292,5 +292,76 @@ RSpec.describe Ai::IntegrationCredentialMigration do
     it 'reports migrated on an installation that has nothing to migrate' do
       expect(described_class.migrated?).to be(true)
     end
+
+    describe 'the recorded migration' do
+      let(:flag) { described_class::MIGRATED_FLAG }
+
+      before { InstallationConfig.where(name: flag).delete_all }
+
+      def recorded?
+        InstallationConfig.find_by(name: flag)&.value == true
+      end
+
+      # The core refuses to delete a credential a consumer still references, so
+      # the bot is unlinked first and keeps its inline key: the legacy source is
+      # back, and only the record tells the install already migrated.
+      def unlink_and_delete_imported(bot)
+        bot.reload.update!(credential_id: nil)
+        Ai::IntegrationCredential.delete_all
+      end
+
+      it 'keeps the install migrated after every imported credential is deleted (AC1)' do
+        bot = create_bot(provider: 'evo_ai_provider', api_key: 'chave-do-bot-9c1d')
+        Ai::IntegrationCredentialMigration.call(apply: true)
+
+        unlink_and_delete_imported(bot)
+
+        expect(described_class.migrated?).to be(true)
+        expect(AgentBots::CredentialResolution.api_key_for(bot.reload)).to be_nil
+      end
+
+      it 'stays not migrated when the record was never written' do
+        bot = create_bot(provider: 'evo_ai_provider', api_key: 'chave-do-bot-9c1d')
+        Ai::IntegrationCredentialMigration.call(apply: true)
+        InstallationConfig.where(name: flag).delete_all
+
+        unlink_and_delete_imported(bot)
+
+        expect(described_class.migrated?).to be(false)
+      end
+
+      it 'is recorded by the apply and not by the dry run' do
+        create_bot(provider: 'evo_ai_provider', api_key: 'chave-do-bot-9c1d')
+
+        Ai::IntegrationCredentialMigration.call(apply: false)
+        expect(recorded?).to be(false)
+
+        Ai::IntegrationCredentialMigration.call(apply: true)
+        expect(recorded?).to be(true)
+      end
+
+      it 'is not recorded by a run that had nothing to import' do
+        Ai::IntegrationCredentialMigration.call(apply: true)
+
+        expect(recorded?).to be(false)
+      end
+
+      it 'is recorded by a rerun over an install that migrated before the record existed' do
+        create_bot(provider: 'evo_ai_provider', api_key: 'chave-do-bot-9c1d')
+        Ai::IntegrationCredentialMigration.call(apply: true)
+        InstallationConfig.where(name: flag).delete_all
+
+        Ai::IntegrationCredentialMigration.call(apply: true)
+
+        expect(recorded?).to be(true)
+      end
+
+      it 'treats a failure reading the record as NOT migrated' do
+        create_bot(provider: 'evo_ai_provider', api_key: 'chave-do-bot-9c1d')
+        allow(InstallationConfig).to receive(:find_by).and_raise(ActiveRecord::StatementInvalid, 'boom')
+
+        expect(described_class.migrated?).to be(false)
+      end
+    end
   end
 end

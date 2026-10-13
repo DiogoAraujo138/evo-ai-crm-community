@@ -301,6 +301,9 @@ class Ai::IntegrationCredentialMigration
       plan.reject { |entry| entry[:skipped] }.each do |entry|
         entry[:bot] ? import_bot(entry) : import_record(entry)
       end
+      # Same transaction: a run that rolls back never records itself. A rerun
+      # on an install that already migrated records it too (the backfill).
+      Ai::IntegrationMigrationState.record_migration! if Ai::IntegrationCredential.where.not(imported_from: nil).exists?
     end
   end
 

@@ -195,6 +195,9 @@ class Ai::CredentialMigration
     ActiveRecord::Base.transaction do
       import_installation(plan)
       plan[:hooks].each { |entry| import_hook(plan, entry) }
+      # Same transaction: a run that rolls back never records itself. A rerun
+      # on an install that already migrated records it too (the backfill).
+      Ai::MigrationState.record_migration! if Ai::Credential.where.not(imported_from: nil).exists?
     end
   end
 

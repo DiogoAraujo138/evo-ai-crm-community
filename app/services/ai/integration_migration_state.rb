@@ -4,17 +4,38 @@
 # vault, which is what keeps the inline fallback from being cut on an install
 # that never migrated — there, every bot, tool and MCP resolves to nothing.
 #
-# Migrated means the task ran (a credential carries `imported_from`) OR there is
-# nothing left inline, the case for a fresh install.
+# Migrated means the task recorded that it ran, OR a credential still carries
+# `imported_from` (installs that migrated before the record existed), OR there
+# is nothing left inline, the case for a fresh install. The record is what
+# matters once credentials are deleted for real: removing the last imported one
+# must not reopen the inline fallback.
 class Ai::IntegrationMigrationState
+  MIGRATED_FLAG = 'INTEGRATION_CREDENTIALS_MIGRATED'
+
   class << self
     def migrated?
-      imported_credentials? || legacy_sources_empty?
+      migration_recorded? || imported_credentials? || legacy_sources_empty?
     end
 
     # The fallback stays alive exactly while the guard says we are not migrated.
     def legacy_fallback_active?
       !migrated?
+    end
+
+    # Read straight from the table: GlobalConfigService would let an env var of
+    # the same name answer, and caches a missing key for a day.
+    def migration_recorded?
+      InstallationConfig.find_by(name: MIGRATED_FLAG)&.value == true
+    rescue StandardError => e
+      Rails.logger.error("Ai::IntegrationMigrationState: #{e.class}: #{e.message}")
+      false
+    end
+
+    def record_migration!
+      config = InstallationConfig.find_or_initialize_by(name: MIGRATED_FLAG)
+      config.value = true
+      config.locked = true
+      config.save!
     end
 
     def imported_credentials?

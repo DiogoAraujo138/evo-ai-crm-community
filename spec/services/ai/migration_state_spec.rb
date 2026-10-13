@@ -108,6 +108,26 @@ RSpec.describe Ai::MigrationState do
 
       expect(described_class).not_to be_migrated
     end
+
+    it 'is backfilled from the imported rows left, without bringing back a deleted one' do
+      # The hook keeps its key and the credential imported from it is gone: a
+      # rerun of the migration would import it again.
+      hook = instance_double(Integrations::Hook, id: SecureRandom.uuid, settings: { 'api_key' => 'sk-hook-8888' })
+      allow(Integrations::Hook).to receive_messages(where: [hook], find_by: hook)
+      with_legacy_global('sk-legacy-9999')
+      register(imported_from: Ai::CredentialMigration::INSTALLATION_SOURCE)
+
+      expect(described_class.record_existing_migration!).to be(true)
+      expect(described_class).to be_migration_recorded
+      expect(Ai::Credential.pluck(:imported_from)).to eq([Ai::CredentialMigration::INSTALLATION_SOURCE])
+    end
+
+    it 'backfills nothing when no imported row is left' do
+      register(imported_from: nil)
+
+      expect(described_class.record_existing_migration!).to be(false)
+      expect(described_class).not_to be_migration_recorded
+    end
   end
 
   describe 'the resolver honours the guard (AC3, AC4)' do

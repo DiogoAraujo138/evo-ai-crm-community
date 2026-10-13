@@ -356,6 +356,28 @@ RSpec.describe Ai::IntegrationCredentialMigration do
         expect(recorded?).to be(true)
       end
 
+      it 'is backfilled from the imported rows left, without relinking a bot the user unlinked' do
+        create_bot(provider: 'evo_ai_provider', api_key: 'chave-do-bot-9c1d')
+        unlinked = create_bot(provider: 'evo_ai_provider', api_key: 'outra-chave-7e2a')
+        Ai::IntegrationCredentialMigration.call(apply: true)
+        InstallationConfig.where(name: flag).delete_all
+        credential_id = unlinked.reload.credential_id
+        unlinked.update!(credential_id: nil)
+        Ai::IntegrationCredential.where(id: credential_id).delete_all
+
+        expect(described_class.record_existing_migration!).to be(true)
+        expect(recorded?).to be(true)
+        expect(imported_credentials.count).to eq(1)
+        expect(AgentBots::CredentialResolution.api_key_for(unlinked.reload)).to be_nil
+      end
+
+      it 'backfills nothing when no imported row is left' do
+        create_bot(provider: 'evo_ai_provider', api_key: 'chave-do-bot-9c1d')
+
+        expect(described_class.record_existing_migration!).to be(false)
+        expect(recorded?).to be(false)
+      end
+
       it 'rolls the import back when recording it fails' do
         bot = create_bot(provider: 'evo_ai_provider', api_key: 'chave-do-bot-9c1d')
         allow(described_class).to receive(:record_migration!).and_raise(ActiveRecord::RecordNotUnique, 'race')

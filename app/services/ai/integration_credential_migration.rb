@@ -302,8 +302,7 @@ class Ai::IntegrationCredentialMigration
         entry[:bot] ? import_bot(entry) : import_record(entry)
       end
       # Last, so a failed import never records itself; inside the transaction,
-      # so a failure recording it rolls the whole import back. A rerun on an
-      # install that already migrated records it too (the backfill).
+      # so a failure recording it rolls the whole import back.
       Ai::IntegrationMigrationState.record_migration! if Ai::IntegrationCredential.where.not(imported_from: nil).exists?
     end
   end

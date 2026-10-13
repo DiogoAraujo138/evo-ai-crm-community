@@ -4,11 +4,9 @@
 # is what keeps the legacy fallback from being cut on an install that never
 # migrated — there, AI would go silently "not configured".
 #
-# Migrated means the task recorded that it ran, OR a credential still carries
-# `imported_from` (installs that migrated before the record existed), OR there
-# is no key in any legacy source, the case for a fresh install. The record is
-# what matters once credentials are deleted for real: removing the last imported
-# one must not reopen the legacy fallback.
+# Migrated means the task recorded it ran (the one signal a real delete cannot
+# undo), a credential still carries `imported_from` (installs migrated before the
+# record), or no legacy source holds a key (a fresh install).
 class Ai::MigrationState
   MIGRATED_FLAG = 'AI_CREDENTIALS_MIGRATED'
 
@@ -31,6 +29,15 @@ class Ai::MigrationState
 
     def record_migration!
       Ai::MigrationRecord.record!(MIGRATED_FLAG)
+    end
+
+    # Backfill for installs migrated before the record: records what the imported
+    # rows still prove and imports nothing, so a credential deleted since stays gone.
+    def record_existing_migration!
+      return false unless imported_credentials?
+
+      record_migration!
+      true
     end
 
     def imported_credentials?

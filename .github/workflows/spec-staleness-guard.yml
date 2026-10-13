@@ -179,7 +179,7 @@ on:
       - 'app/services/ai/migration_state.rb'
       - 'spec/requests/api/v1/ai_credentials_migration_state_spec.rb'
       - 'spec/services/ai/migration_state_spec.rb'
-      # Credentials are deleted for real, so "migrated" is a record the two
+      # Credentials are deleted for real, so "migrated" is a record the
       # migration tasks write, not the presence of an imported row. Dropping
       # the record, or writing it on a dry run or an empty run, flips the
       # legacy fallback back on (or off) behind everyone's back.

@@ -4,11 +4,9 @@
 # vault, which is what keeps the inline fallback from being cut on an install
 # that never migrated — there, every bot, tool and MCP resolves to nothing.
 #
-# Migrated means the task recorded that it ran, OR a credential still carries
-# `imported_from` (installs that migrated before the record existed), OR there
-# is nothing left inline, the case for a fresh install. The record is what
-# matters once credentials are deleted for real: removing the last imported one
-# must not reopen the inline fallback.
+# Migrated means the task recorded it ran (the one signal a real delete cannot
+# undo), a credential still carries `imported_from` (installs migrated before the
+# record), or nothing is left inline (a fresh install).
 class Ai::IntegrationMigrationState
   MIGRATED_FLAG = 'INTEGRATION_CREDENTIALS_MIGRATED'
 
@@ -28,6 +26,15 @@ class Ai::IntegrationMigrationState
 
     def record_migration!
       Ai::MigrationRecord.record!(MIGRATED_FLAG)
+    end
+
+    # Backfill for installs migrated before the record: records what the imported
+    # rows still prove and imports nothing, so an unlinked bot stays unlinked.
+    def record_existing_migration!
+      return false unless imported_credentials?
+
+      record_migration!
+      true
     end
 
     def imported_credentials?

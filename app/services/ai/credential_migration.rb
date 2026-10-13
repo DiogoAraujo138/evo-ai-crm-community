@@ -196,8 +196,7 @@ class Ai::CredentialMigration
       import_installation(plan)
       plan[:hooks].each { |entry| import_hook(plan, entry) }
       # Last, so a failed import never records itself; inside the transaction,
-      # so a failure recording it rolls the whole import back. A rerun on an
-      # install that already migrated records it too (the backfill).
+      # so a failure recording it rolls the whole import back.
       Ai::MigrationState.record_migration! if Ai::Credential.where.not(imported_from: nil).exists?
     end
   end

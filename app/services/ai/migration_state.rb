@@ -25,20 +25,12 @@ class Ai::MigrationState
       !migrated?(legacy_hook: legacy_hook)
     end
 
-    # Read straight from the table: GlobalConfigService would let an env var of
-    # the same name answer, and caches a missing key for a day.
     def migration_recorded?
-      InstallationConfig.find_by(name: MIGRATED_FLAG)&.value == true
-    rescue StandardError => e
-      Rails.logger.error("Ai::MigrationState: #{e.class}: #{e.message}")
-      false
+      Ai::MigrationRecord.recorded?(MIGRATED_FLAG)
     end
 
     def record_migration!
-      config = InstallationConfig.find_or_initialize_by(name: MIGRATED_FLAG)
-      config.value = true
-      config.locked = true
-      config.save!
+      Ai::MigrationRecord.record!(MIGRATED_FLAG)
     end
 
     def imported_credentials?

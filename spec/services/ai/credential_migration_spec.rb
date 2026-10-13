@@ -279,6 +279,14 @@ RSpec.describe Ai::CredentialMigration do
       expect(recorded?).to be(false)
     end
 
+    it 'rolls the import back when recording it fails' do
+      with_global_key('sk-global-1111')
+      allow(Ai::MigrationState).to receive(:record_migration!).and_raise(ActiveRecord::RecordNotUnique, 'race')
+
+      expect { run(apply: true) }.to raise_error(ActiveRecord::RecordNotUnique)
+      expect(Ai::Credential.where.not(imported_from: nil)).to be_empty
+    end
+
     it 'keeps the install migrated after every imported credential is deleted (AC1)' do
       with_global_key('sk-global-1111')
       run(apply: true)

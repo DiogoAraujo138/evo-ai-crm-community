@@ -356,6 +356,15 @@ RSpec.describe Ai::IntegrationCredentialMigration do
         expect(recorded?).to be(true)
       end
 
+      it 'rolls the import back when recording it fails' do
+        bot = create_bot(provider: 'evo_ai_provider', api_key: 'chave-do-bot-9c1d')
+        allow(described_class).to receive(:record_migration!).and_raise(ActiveRecord::RecordNotUnique, 'race')
+
+        expect { Ai::IntegrationCredentialMigration.call(apply: true) }.to raise_error(ActiveRecord::RecordNotUnique)
+        expect(Ai::IntegrationCredential.where.not(imported_from: nil)).to be_empty
+        expect(bot.reload.credential_id).to be_nil
+      end
+
       it 'treats a failure reading the record as NOT migrated' do
         create_bot(provider: 'evo_ai_provider', api_key: 'chave-do-bot-9c1d')
         allow(InstallationConfig).to receive(:find_by).and_raise(ActiveRecord::StatementInvalid, 'boom')

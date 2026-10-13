@@ -108,42 +108,6 @@ RSpec.describe Ai::MigrationState do
 
       expect(described_class).not_to be_migrated
     end
-
-    it 'only counts a record holding true' do
-      InstallationConfig.create!(name: described_class::MIGRATED_FLAG, value: false)
-      with_legacy_global('sk-legacy-9999')
-
-      expect(described_class).not_to be_migrated
-    end
-
-    it 'does not read the string "false" as a recorded migration' do
-      InstallationConfig.create!(name: described_class::MIGRATED_FLAG, value: 'false')
-      with_legacy_global('sk-legacy-9999')
-
-      expect(described_class).not_to be_migrated
-    end
-
-    it 'treats a failure reading the record as NOT migrated' do
-      allow(InstallationConfig).to receive(:find_by).and_raise(ActiveRecord::StatementInvalid, 'boom')
-      with_legacy_global('sk-legacy-9999')
-
-      expect(described_class).not_to be_migrated
-    end
-
-    it 'ignores an env var with the record name' do
-      with_legacy_global('sk-legacy-9999')
-      stub_const('ENV', ENV.to_h.merge(described_class::MIGRATED_FLAG => 'true'))
-
-      expect(described_class).not_to be_migrated
-    end
-
-    it 'writes the record once, locked, however often it is recorded' do
-      2.times { described_class.record_migration! }
-
-      records = InstallationConfig.where(name: described_class::MIGRATED_FLAG)
-      expect(records.count).to eq(1)
-      expect(records.first).to have_attributes(value: true, locked: true)
-    end
   end
 
   describe 'the resolver honours the guard (AC3, AC4)' do

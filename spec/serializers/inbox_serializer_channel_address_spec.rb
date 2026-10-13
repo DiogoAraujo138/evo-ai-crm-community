@@ -2,8 +2,7 @@
 
 require 'rails_helper'
 
-# The channel list shows each channel's own address next to its name. The address
-# is all the inbox payload carries of the channel: its configuration holds credentials.
+# The channel list shows each channel's own address next to its name.
 RSpec.describe InboxSerializer do
   def serialize(channel)
     described_class.serialize(Inbox.new(channel: channel, name: 'canal'))

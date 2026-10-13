@@ -56,8 +56,7 @@ module InboxSerializer
       result['last_sync'] = health[:last_sync]&.to_i
       result['reauthorization_required'] = health[:reauthorization_required]
 
-      # The channel's own address, shown next to its name. Only the address: the
-      # channel's configuration carries credentials.
+      # The channel's own address, shown next to its name.
       result['phone_number'] = inbox.channel.phone_number if inbox.whatsapp? || inbox.sms? || inbox.twilio?
       result['email'] = inbox.channel.email if inbox.email?
       result['email'] = inbox.channel.from_email if inbox.sendgrid?

@@ -120,6 +120,37 @@ RSpec.describe 'Campaigns proxy RBAC', type: :request do
       expect(response).to have_http_status(:bad_request)
       expect(a_request(:any, /evo-flow\.test/)).not_to have_been_made
     end
+
+    it 'refuses a dot segment, which would reach the action under another permission' do
+      grant_permissions('campaigns.read', 'campaigns.update', 'campaigns.create')
+
+      post '/api/v1/campaigns/c1/execute/.', params: {}, as: :json
+
+      expect(response).to have_http_status(:bad_request)
+      expect(a_request(:any, /evo-flow\.test/)).not_to have_been_made
+    end
+  end
+
+  describe 'evo-flow errors' do
+    it 'answers 502, not 401, when evo-flow refuses the service call' do
+      grant_permissions('campaigns.read')
+      stub_request(:get, "#{api_url}/campaigns")
+        .to_return(status: 401, body: { code: 'TENANT_REQUIRED' }.to_json, headers: json)
+
+      get '/api/v1/campaigns'
+
+      expect(response).to have_http_status(:bad_gateway)
+    end
+
+    it 'relays any other evo-flow status' do
+      grant_permissions('campaigns.update')
+      stub_request(:patch, "#{api_url}/campaigns/c1")
+        .to_return(status: 422, body: { message: 'invalid' }.to_json, headers: json)
+
+      patch '/api/v1/campaigns/c1', params: { title: '' }, as: :json
+
+      expect(response).to have_http_status(:unprocessable_entity)
+    end
   end
 
   describe 'permission mapping per method + subpath' do
@@ -154,27 +185,46 @@ RSpec.describe 'Campaigns proxy RBAC', type: :request do
 
     {
       'schedule' => 'campaigns.schedule', 'execute' => 'campaigns.execute', 'pause' => 'campaigns.pause',
-      'resume' => 'campaigns.resume', 'stop' => 'campaigns.stop', 'duplicate' => 'campaigns.duplicate'
+      'resume' => 'campaigns.resume', 'stop' => 'campaigns.stop', 'execution/cancel' => 'campaigns.stop',
+      'duplicate' => 'campaigns.duplicate'
     }.each do |action, permission|
       it "demands #{permission} for POST /campaigns/:id/#{action}, not campaigns.update" do
         grant_permissions('campaigns.read', 'campaigns.update', 'campaigns.create')
         post "/api/v1/campaigns/c1/#{action}", params: {}, as: :json
         expect_denied
       end
+
+      it "forwards POST /campaigns/:id/#{action} with #{permission} alone" do
+        grant_permissions(permission)
+        stub = stub_request(:post, "#{api_url}/campaigns/c1/#{action}")
+               .to_return(status: 200, body: { data: { id: 'c1' } }.to_json, headers: json)
+
+        post "/api/v1/campaigns/c1/#{action}", params: {}, as: :json
+
+        expect(response).to have_http_status(:ok)
+        expect(stub).to have_been_requested
+      end
     end
 
     it 'demands campaigns.bulk_action for POST /campaigns/bulk-action' do
       grant_permissions('campaigns.read', 'campaigns.update', 'campaigns.create', 'campaigns.delete')
-      post '/api/v1/campaigns/bulk-action', params: { action: 'delete', ids: %w[c1] }, as: :json
+      post '/api/v1/campaigns/bulk-action', params: { action: 'delete', campaign_ids: %w[c1] }, as: :json
       expect_denied
     end
 
-    it 'allows an action with its own permission' do
-      grant_permissions('campaigns.pause')
-      stub = stub_request(:post, "#{api_url}/campaigns/c1/pause")
-             .to_return(status: 200, body: { data: { id: 'c1' } }.to_json, headers: json)
+    it 'demands the key of the action a bulk applies, on top of campaigns.bulk_action' do
+      grant_permissions('campaigns.bulk_action', 'campaigns.update')
+      post '/api/v1/campaigns/bulk-action', params: { action: 'delete', campaign_ids: %w[c1] }, as: :json
+      expect_denied
+    end
 
-      post '/api/v1/campaigns/c1/pause', params: {}, as: :json
+    it 'forwards a bulk action, its action key included, with both permissions' do
+      grant_permissions('campaigns.bulk_action', 'campaigns.delete')
+      stub = stub_request(:post, "#{api_url}/campaigns/bulk-action")
+             .with(body: { action: 'delete', campaign_ids: %w[c1] }.to_json)
+             .to_return(status: 200, body: { data: { affected_count: 1 } }.to_json, headers: json)
+
+      post '/api/v1/campaigns/bulk-action', params: { action: 'delete', campaign_ids: %w[c1] }, as: :json
 
       expect(response).to have_http_status(:ok)
       expect(stub).to have_been_requested

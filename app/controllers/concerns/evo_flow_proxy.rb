@@ -11,9 +11,10 @@ module EvoFlowProxy
   MAX_BODY_DEPTH = 25
 
   # Rails unescapes the glob (%2F -> /, %2e -> .) and Client#join runs URI.join,
-  # which resolves `..`: an unfiltered subpath leaves the surface and reaches any
-  # evo-flow endpoint under the service key.
+  # which resolves dot segments: `..` leaves the surface for any evo-flow endpoint,
+  # and `.` makes evo-flow serve a path other than the one the permission came from.
   SAFE_SUBPATH = %r{\A[A-Za-z0-9\-._~/]+\z}
+  DOT_SEGMENTS = %w[. ..].freeze
 
   included do
     include EvoFlowTenantPassthrough
@@ -65,7 +66,7 @@ module EvoFlowProxy
   def reject_unsafe_subpath!
     sub = params[:path].to_s
     return if sub.blank?
-    return if sub.match?(SAFE_SUBPATH) && sub.split('/').none? { |segment| segment == '..' }
+    return if sub.match?(SAFE_SUBPATH) && sub.split('/').none? { |segment| DOT_SEGMENTS.include?(segment) }
 
     render json: { errors: { message: "Invalid #{evo_flow_resource} path" } }, status: :bad_request
   end
@@ -111,9 +112,12 @@ module EvoFlowProxy
     end
   end
 
+  # evo-flow's 401 refuses the service call, not the user's session; relayed as-is,
+  # the browser reads it as a lost session and logs out.
   def handle_evo_flow_error(error)
     body = error.response&.parsed_response || { message: error.message }
-    render json: { errors: body }, status: (error.code || :bad_gateway)
+    status = error.code.nil? || error.code == 401 ? :bad_gateway : error.code
+    render json: { errors: body }, status: status
   end
 
   # 503, not 500: the integration was never configured on this deployment.

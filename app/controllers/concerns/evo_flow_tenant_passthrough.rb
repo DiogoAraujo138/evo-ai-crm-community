@@ -1,13 +1,9 @@
 # frozen_string_literal: true
 
-# Multi-tenant evo-flow requires the CALLER's tenant and identity on every
-# proxied request: X-Evo-Tenant-Id scopes, and the runtime-context enricher
-# reads the user from the JWT `sub` of the Authorization header (authentication
-# itself stays on the integration key, which the bearer guard honors first).
-# Without them evo-flow answers 401 TENANT_REQUIRED even to the proxy.
-# A browser that picks its tenant by cookie sends no header, so the tenant the
-# request already resolved (runtime-context extension point) fills it.
-# Single-tenant deployments resolve none and nothing changes.
+# Multi-tenant evo-flow needs the caller's tenant (X-Evo-Tenant-Id) and identity
+# (JWT `sub`; auth stays on the integration key) or it answers 401 TENANT_REQUIRED.
+# With no header (tenant picked by cookie) the tenant the request resolved fills
+# it; single-tenant deployments resolve none and send nothing.
 module EvoFlowTenantPassthrough
   extend ActiveSupport::Concern
 

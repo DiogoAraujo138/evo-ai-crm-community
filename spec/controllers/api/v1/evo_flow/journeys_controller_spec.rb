@@ -35,7 +35,7 @@ RSpec.describe Api::V1::EvoFlow::JourneysController, type: :controller do
       )
     end
 
-    # The box browser picks its tenant by cookie and sends no header.
+    # A browser that picks its tenant by cookie sends no header.
     it 'forwards the tenant the request resolved when the caller sent no header' do
       allow(EvoExtensionPoints::RuntimeContext).to receive(:current_scope_id)
         .and_return('2c013165-3992-4e6f-ba0d-4b6cb768a5d6')

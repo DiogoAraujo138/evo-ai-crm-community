@@ -25,15 +25,28 @@ module Chordata
       EvoExtensionPoints.replace(:runtime_context_with_scope) do |id, &block|
         Current.set(empresa_id: id) do
           conn = ActiveRecord::Base.connection
-          ActiveRecord::Base.transaction do
-            # set_config(..., true) só expira no fim da TRANSAÇÃO, não do bloco: dentro de uma
-            # transação já aberta a empresa vazaria para o resto dela. Por isso restauramos o valor anterior.
-            anterior = conn.select_value("SELECT current_setting('app.empresa_id', true)").to_s
-            conn.execute("SELECT set_config('app.empresa_id', #{conn.quote(id.to_s)}, true)")
+          anterior = conn.select_value("SELECT current_setting('app.empresa_id', true)").to_s
+          quoted = conn.quote(id.to_s)
+          if conn.transaction_open?
+            # Já dentro de uma transação de outro dono: valor LOCAL, restaurado ao sair do bloco. Os after_commit
+            # dela rodam fora do nosso controle (e do nosso escopo).
+            ActiveRecord::Base.transaction do
+              conn.execute("SELECT set_config('app.empresa_id', #{quoted}, true)")
+              begin
+                block&.call
+              ensure
+                conn.execute("SELECT set_config('app.empresa_id', #{conn.quote(anterior)}, true)")
+              end
+            end
+          else
+            # Transação mais externa: os callbacks after_commit do Rails (ex.: Message#reopen_conversation, despacho
+            # de eventos) rodam DEPOIS do COMMIT, já fora da transação. Com valor só LOCAL eles perderiam a empresa e o
+            # RLS esconderia os próprios registros. Por isso o valor é da SESSÃO e é restaurado DEPOIS do commit.
+            conn.execute("SELECT set_config('app.empresa_id', #{quoted}, false)")
             begin
-              block&.call
+              ActiveRecord::Base.transaction { block&.call }
             ensure
-              conn.execute("SELECT set_config('app.empresa_id', #{conn.quote(anterior)}, true)")
+              conn.execute("SELECT set_config('app.empresa_id', #{conn.quote(anterior)}, false)")
             end
           end
         end

@@ -40,17 +40,21 @@ class Api::V1::PipelinesController < Api::V1::BaseController
     # Inactive pipelines are hidden by default because every picker in the app (dashboard,
     # kanban, automations, agents) lists pipelines through this endpoint. The pipelines
     # management screen opts in so a deactivated pipeline stays visible and can be reactivated.
+    # pipeline_items are NOT preloaded: counts and totals come from PipelineListStats
+    # (one aggregate query) so the list does not instantiate every lead of every pipeline.
     @pipelines = policy_scope(Pipeline)
-                        .includes(:pipeline_teams, pipeline_stages: [], pipeline_items: [])
+                        .includes(:pipeline_teams, pipeline_stages: [])
                         .order(:name)
     @pipelines = @pipelines.active unless include_inactive?
+    stats = PipelineListStats.new(@pipelines.map(&:id))
 
     success_response(
       data: PipelineSerializer.serialize_collection(
         @pipelines,
         include_stages: true,
         include_items: false,
-        include_services_info: true
+        include_services_info: true,
+        stats: stats
       ),
       message: 'Pipelines retrieved successfully'
     )

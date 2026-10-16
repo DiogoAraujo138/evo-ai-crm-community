@@ -22,7 +22,11 @@ module PipelineSerializer
   def serialize(pipeline, include_stages: false, include_items: false,
                 include_tasks_info: false, include_services_info: false,
                 include_labels: false, labels_by_title: nil, labels_by_id: nil,
-                task_counts_by_item: nil)
+                task_counts_by_item: nil, stats: nil)
+    # `stats` (PipelineListStats) is passed by the list endpoint so counts and totals come
+    # from one aggregated query instead of one COUNT/sum over loaded items per pipeline.
+    pipeline_totals = stats&.pipeline(pipeline.id)
+    item_count = pipeline_totals ? pipeline_totals.count : pipeline.item_count
     result = {
       id: pipeline.id,
       name: pipeline.name,
@@ -36,8 +40,8 @@ module PipelineSerializer
       is_active: pipeline.is_active,
       is_default: pipeline.is_default,
       custom_fields: pipeline.custom_fields || {},
-      item_count: pipeline.item_count,
-      conversations_count: pipeline.item_count, # Alias for frontend compatibility
+      item_count: item_count,
+      conversations_count: item_count, # Alias for frontend compatibility
       created_at: pipeline.created_at&.iso8601,
       updated_at: pipeline.updated_at&.iso8601
     }
@@ -86,7 +90,7 @@ module PipelineSerializer
 
         # Serialize stages with items already included
         result[:stages] = ordered_stages.map do |stage|
-          stage_data = PipelineStageSerializer.serialize(stage, include_item_count: true)
+          stage_data = PipelineStageSerializer.serialize(stage, include_item_count: true, stats: stats)
           # Include items directly in the stage
           stage_data[:items] = items_by_stage[stage.id] || []
           stage_data
@@ -94,7 +98,7 @@ module PipelineSerializer
       else
         # Just serialize stages without items
         result[:stages] = ordered_stages.map do |stage|
-          PipelineStageSerializer.serialize(stage, include_item_count: true)
+          PipelineStageSerializer.serialize(stage, include_item_count: true, stats: stats)
         end
       end
     end
@@ -105,7 +109,7 @@ module PipelineSerializer
     # services_info shape (PipelineItemSerializer) but aggregated over the whole
     # pipeline via Pipeline#total_value. Preloaded pipeline_items keep this N+1-free.
     if include_services_info
-      total_value = pipeline.total_value
+      total_value = pipeline_totals ? pipeline_totals.value : pipeline.total_value
       result[:services_info] = {
         total_value: total_value,
         currency: 'BRL',

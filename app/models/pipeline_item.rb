@@ -121,9 +121,15 @@ class PipelineItem < ApplicationRecord
   end
 
   def services_total_value
-    return 0 unless custom_fields&.dig('services').is_a?(Array)
+    self.class.services_value(custom_fields&.dig('services'))
+  end
 
-    custom_fields['services'].sum do |service|
+  # Sum of a `custom_fields['services']` payload. Class-level so aggregations that
+  # only pluck that column (PipelineListStats) use the exact same rule as the model.
+  def self.services_value(services)
+    return 0 unless services.is_a?(Array)
+
+    services.sum do |service|
       service['value'].to_f
     end
   end

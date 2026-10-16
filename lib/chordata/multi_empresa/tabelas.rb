@@ -125,7 +125,7 @@ module Chordata
       ].freeze
 
       # Chaves por id de registro (PK): o webhook traz o id de uma mensagem nossa (ex.: custom_args do SendGrid).
-      CHAVES_POR_ID = [%w[messages id]].freeze
+      CHAVES_POR_ID = [%w[messages id], %w[crm_forms id]].freeze
 
       # Chaves que o webhook usa para achar a empresa (função chordata_resolver_empresa).
       def self.chaves_de_resolucao

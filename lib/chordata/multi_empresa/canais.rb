@@ -19,7 +19,21 @@ module Chordata
         { controller: 'Webhooks::SmsController', obrigatoria: true, tabela: 'channel_sms', coluna: 'phone_number',
           chave: ->(c) { c.params[:phone_number] } },
         { controller: 'Webhooks::WhatsappController', tabela: 'channel_whatsapp', coluna: 'phone_number',
-          chave: ->(c) { c.params[:phone_number] } }
+          chave: ->(c) { c.params[:phone_number] } },
+        # API pública do canal "API" (inclui contatos, conversas e mensagens): o identificador vem em :inbox_id (ou :id no show).
+        { controller: 'Public::Api::V1::InboxesController', obrigatoria: true, tabela: 'channel_api', coluna: 'identifier',
+          chave: ->(c) { c.params[:inbox_id].presence || c.params[:id] } },
+        { controller: 'Public::Api::V1::ChatPagesController', obrigatoria: true, tabela: 'chat_pages', coluna: 'slug',
+          chave: ->(c) { c.params[:slug] } },
+        # Formulário público: a chave pode ser o slug ou o id (uuid).
+        { controller: 'Public::Api::V1::FormsController', obrigatoria: true, tabela: 'crm_forms',
+          coluna: ->(c) { c.params[:slug].to_s.match?(/\A\h{8}-\h{4}-\h{4}-\h{4}-\h{12}\z/) ? 'id' : 'slug' },
+          chave: ->(c) { c.params[:slug] } },
+        # Pesquisa de satisfação: o :id é o uuid público da conversa.
+        { controller: 'Public::Api::V1::CsatSurveyController', obrigatoria: true, tabela: 'conversations', coluna: 'uuid',
+          chave: ->(c) { c.params[:id] } }
+        # Public::Api::V1::LeadsController NÃO está aqui: autentica por chave de API (AccessToken, global) e a empresa não
+        # sai da chave; precisa de decisão (cabeçalho X-Evo-Tenant-Id + vínculo do dono da chave). Falha fechado hoje.
       ].freeze
 
       # Webhooks cuja chave só aparece no CORPO do payload do provedor. Ainda NÃO ligados: sem empresa
@@ -142,7 +156,8 @@ module Chordata
             return yield
           end
 
-          id = MultiEmpresa.resolver_empresa_do_canal(rota[:tabela], rota[:coluna], valor)
+          coluna = rota[:coluna].respond_to?(:call) ? rota[:coluna].call(controller) : rota[:coluna]
+          id = MultiEmpresa.resolver_empresa_do_canal(rota[:tabela], coluna, valor)
           return controller.render(json: { error: 'Canal não encontrado' }, status: :not_found) if id.nil?
 
           EvoExtensionPoints::RuntimeContext.with_scope(id) { yield }

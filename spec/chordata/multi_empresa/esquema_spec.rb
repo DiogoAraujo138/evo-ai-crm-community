@@ -217,6 +217,28 @@ RSpec.describe 'Multi-empresa: esquema, isolamento e escopo (70 tabelas)' do
       end
     end
 
+    it 'acha a empresa por chave dentro do provider_config e devolve nulo se a chave estiver em duas empresas' do
+      a = empresa_nova("json-a-#{SecureRandom.hex(3)}")
+      b = empresa_nova("json-b-#{SecureRandom.hex(3)}")
+      conn.execute('SET LOCAL session_replication_role = replica')
+      cria = lambda do |emp, fone, config|
+        conn.execute("INSERT INTO channel_whatsapp (phone_number, provider_config, empresa_id, created_at, updated_at) "                      "VALUES ('#{fone}', '#{config}', '#{emp}', now(), now())")
+      end
+      cria.call(a, '+5511900000001', '{"phone_number_id":"pn-unico","instance_name":"mesma"}')
+      cria.call(b, '+5511900000002', '{"instance_name":"mesma","instance_id":"z-b"}')
+      conn.execute('SET LOCAL session_replication_role = origin')
+
+      como_app do
+        resolver = Chordata::MultiEmpresa.method(:resolver_empresa_do_canal)
+        expect(resolver.call('channel_whatsapp', 'provider_config->>phone_number_id', 'pn-unico')).to eq(a)
+        expect(resolver.call('channel_whatsapp', 'provider_config->>instance_id', 'z-b')).to eq(b)
+        # "mesma" existe nas duas empresas: ambíguo, nunca adivinhar
+        expect(resolver.call('channel_whatsapp', 'provider_config->>instance_name', 'mesma')).to be_nil
+        expect(resolver.call('channel_whatsapp', 'provider_config->>phone_number_id', 'nao-existe')).to be_nil
+        expect(conn.select_value('SELECT count(*) FROM channel_whatsapp').to_i).to eq(0)
+      end
+    end
+
     it 'devolve nulo para chave desconhecida e recusa tabela ou coluna fora da lista' do
       como_app do
         expect(Chordata::MultiEmpresa.resolver_empresa_do_canal('channel_whatsapp', 'phone_number', 'nao-existe')).to be_nil

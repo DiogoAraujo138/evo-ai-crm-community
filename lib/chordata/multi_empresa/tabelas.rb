@@ -113,12 +113,23 @@ module Chordata
         'webhooks' => { 'url' => :convertir }
       }.freeze
 
+      # Identificadores de canal que vivem dentro de provider_config (JSON). NÃO são únicos no banco: o resolvedor
+      # devolve nulo se a mesma chave existir em mais de uma empresa.
+      CHAVES_EM_JSON = [
+        %w[channel_whatsapp provider_config->>phone_number_id],
+        %w[channel_whatsapp provider_config->>waba_id],
+        %w[channel_whatsapp provider_config->>business_account_id],
+        %w[channel_whatsapp provider_config->>instance_id],
+        %w[channel_whatsapp provider_config->>instance_uuid],
+        %w[channel_whatsapp provider_config->>instance_name]
+      ].freeze
+
       # Chaves que o webhook usa para achar a empresa (função chordata_resolver_empresa).
       def self.chaves_de_resolucao
         UNICOS.flat_map do |tabela, indices|
           indices.select { |_cols, tipo| tipo == :global }.keys.reject { |c| c.include?(',') }
                  .map { |coluna| [tabela, coluna] }
-        end
+        end + CHAVES_EM_JSON
       end
     end
   end

@@ -30,6 +30,11 @@ module Chordata
       end
 
       class << self
+        # Chamada de serviço já autenticada por segredo (ex.: retorno do Bot Runtime): só confia no cabeçalho.
+        def servico!(cabecalho)
+          resolver_servico!(cabecalho.to_s.strip.presence)
+        end
+
         # Devolve o id da empresa ou levanta Recusada.
         def resolver!(usuario:, papel:, cabecalho:, servico: false)
           pedida = cabecalho.to_s.strip.presence
@@ -102,7 +107,15 @@ module Chordata
       included do
         around_perform do |job, bloco|
           id = job.instance_variable_get(:@chordata_empresa_id)
-          id ? EvoExtensionPoints::RuntimeContext.with_scope(id, &bloco) : bloco.call
+          if id
+            EvoExtensionPoints::RuntimeContext.with_scope(id, &bloco)
+          elsif Chordata::MultiEmpresa::Current.empresa_id.blank? && Chordata::MultiEmpresa::TempoReal.agendado?(job.class)
+            # Tarefa agendada (config/schedule.yml): não tem requisição nem quem a enfileirou. Roda uma vez por
+            # empresa ativa; os jobs filhos que ela enfileirar já levam a empresa.
+            Chordata::MultiEmpresa::TempoReal.para_cada_empresa_ativa(job.class) { bloco.call }
+          else
+            bloco.call
+          end
         end
       end
 

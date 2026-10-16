@@ -8,6 +8,8 @@ require_relative 'multi_empresa/tabelas'
 require_relative 'multi_empresa/esquema'
 require_relative 'multi_empresa/canais'
 require_relative 'multi_empresa/rotas'
+require_relative 'multi_empresa/bot_runtime'
+require_relative 'multi_empresa/tempo_real'
 
 module Chordata
   module MultiEmpresa
@@ -94,6 +96,8 @@ module Chordata
       end
       base.around_action(:chordata_escopo)
       Chordata::MultiEmpresa::Canais.ligar!
+      Chordata::MultiEmpresa::BotRuntime.ligar!
+      Chordata::MultiEmpresa::TempoReal.ligar!
       require_relative 'multi_empresa/empresas_controller'
     end
 

@@ -47,6 +47,8 @@ RSpec.describe Chordata::MultiEmpresa::Tabelas do
   it 'toda chave de resolução é uma coluna única global de tabela de empresa' do
     described_class.chaves_de_resolucao.each do |tabela, coluna|
       expect(described_class.empresa).to include(tabela)
+      next if described_class::CHAVES_EM_JSON.include?([tabela, coluna]) # JSON: não são únicas (o resolvedor trata a ambiguidade)
+
       expect(described_class::UNICOS.dig(tabela, coluna)).to eq(:global)
     end
     expect(described_class.chaves_de_resolucao.size).to be >= 15

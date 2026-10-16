@@ -179,14 +179,26 @@ module Chordata
           conn.execute(<<~SQL)
             CREATE OR REPLACE FUNCTION chordata_resolver_empresa(p_tabela text, p_coluna text, p_valor text)
             RETURNS uuid LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_temp AS $fn$
-            DECLARE resultado uuid;
+            DECLARE empresas_achadas uuid[]; v_coluna text; v_chave text;
             BEGIN
               IF NOT EXISTS (SELECT 1 FROM chordata_chaves_resolucao WHERE tabela = p_tabela AND coluna = p_coluna) THEN
                 RAISE EXCEPTION 'chave de resolucao nao permitida: %.%', p_tabela, p_coluna;
               END IF;
-              EXECUTE format('SELECT empresa_id FROM %I WHERE %I::text = $1 LIMIT 1', p_tabela, p_coluna)
-                INTO resultado USING p_valor;
-              RETURN resultado;
+              IF position('->>' IN p_coluna) > 0 THEN
+                -- chave dentro de uma coluna JSON (ex.: provider_config->>phone_number_id)
+                v_coluna := split_part(p_coluna, '->>', 1);
+                v_chave := split_part(p_coluna, '->>', 2);
+                EXECUTE format('SELECT array_agg(DISTINCT empresa_id) FROM %I WHERE %I ->> %L = $1', p_tabela, v_coluna, v_chave)
+                  INTO empresas_achadas USING p_valor;
+              ELSE
+                EXECUTE format('SELECT array_agg(DISTINCT empresa_id) FROM %I WHERE %I::text = $1', p_tabela, p_coluna)
+                  INTO empresas_achadas USING p_valor;
+              END IF;
+              -- Mesma chave em duas empresas: ambíguo, NUNCA adivinhar (entregar o webhook na empresa errada).
+              IF empresas_achadas IS NULL OR array_length(empresas_achadas, 1) <> 1 THEN
+                RETURN NULL;
+              END IF;
+              RETURN empresas_achadas[1];
             END
             $fn$;
             REVOKE ALL ON FUNCTION chordata_resolver_empresa(text, text, text) FROM PUBLIC;
@@ -194,7 +206,7 @@ module Chordata
             GRANT SELECT ON chordata_chaves_resolucao TO #{PAPEL_RESOLVEDOR};
           SQL
           Tabelas.chaves_de_resolucao.each do |tabela, coluna|
-            conn.execute("GRANT SELECT (empresa_id, #{conn.quote_column_name(coluna)}) ON #{conn.quote_table_name(tabela)} TO #{PAPEL_RESOLVEDOR}")
+            conn.execute("GRANT SELECT (empresa_id, #{conn.quote_column_name(coluna.split('->>').first)}) ON #{conn.quote_table_name(tabela)} TO #{PAPEL_RESOLVEDOR}")
           end
         end
       end

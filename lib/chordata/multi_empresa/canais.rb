@@ -26,15 +26,57 @@ module Chordata
       # resolvida, qualquer acesso a dado falha (SemEscopo/RLS), nunca vaza. Cada um precisa ler o
       # identificador do payload e chamar MultiEmpresa.resolver_empresa_do_canal.
       PENDENTES = {
-        'Webhooks::WhatsappController (Cloud API, Evolution, Z-API sem phone_number na URL)' => 'channel_whatsapp.phone_number (metadata do payload)',
-        'Webhooks::InstagramController' => 'channel_instagram.instagram_id (entry[].id)',
-        'Webhooks::FacebookController' => 'channel_facebook_pages.page_id (entry[].id)',
         'Webhooks::GmailController' => 'channel_email.email (mensagem do Pub/Sub)',
         'Webhooks::SendgridController' => 'channel_sendgrid (destinatário)',
         'Api::V1::WebhooksController#twitter_events' => 'channel_twitter_profiles.profile_id',
-        'Webhooks::EvolutionHubController' => 'instância do Evolution Hub',
-        'Webhooks::BotRuntimeController' => 'chamada de serviço: X-Evo-Tenant-Id'
+        'Webhooks::EvolutionHubController' => 'instância do Evolution Hub'
       }.freeze
+      # WhatsApp (todos os provedores sem phone_number na URL), Instagram e Facebook saíram daqui: ver PAYLOAD.
+      # Limitação: Meta pode agrupar várias páginas/contas em um mesmo POST; a empresa vem da PRIMEIRA entrada e
+      # entradas de outra empresa são descartadas (falham fechado no job), nunca processadas na empresa errada.
+      # Webhooks::BotRuntimeController saiu daqui: ver multi_empresa/bot_runtime.rb (segredo + X-Evo-Tenant-Id).
+
+      # Webhooks cuja chave só vem no CORPO. `candidatas` devolve [[tabela, coluna, valor], ...] na ordem em que o
+      # job original procura o canal; vale a primeira que resolver para uma única empresa.
+      PAYLOAD = [
+        { controller: 'Webhooks::WhatsappController',
+          candidatas: lambda { |c|
+            p = c.params
+            id_cloud = p.dig(:entry, 0, :changes, 0, :value, :metadata, :phone_number_id) || p.dig(:metadata, :phone_number_id)
+            [
+              ['channel_whatsapp', 'provider_config->>phone_number_id', id_cloud],
+              ['channel_whatsapp', 'provider_config->>instance_id', (p[:instanceId] if p[:type].present?)],
+              ['channel_whatsapp', 'provider_config->>instance_uuid', p[:instanceId]],
+              ['channel_whatsapp', 'provider_config->>instance_name', (p[:instance] if p[:event].present?)],
+              ['channel_whatsapp', 'phone_number', p[:phone_number]],
+              ['channel_whatsapp', 'provider_config->>waba_id', (p.dig(:entry, 0, :id) if p[:object] == 'whatsapp_business_account')],
+              ['channel_whatsapp', 'provider_config->>business_account_id', (p.dig(:entry, 0, :id) if p[:object] == 'whatsapp_business_account')]
+            ]
+          } },
+        { controller: 'Webhooks::InstagramController',
+          candidatas: ->(c) { [['channel_instagram', 'instagram_id', c.params.dig(:entry, 0, :id)]] } },
+        { controller: 'Webhooks::FacebookController',
+          candidatas: ->(c) { [['channel_facebook_pages', 'page_id', c.params.dig(:entry, 0, :id)]] } }
+      ].freeze
+
+      module FiltroPayload
+        # Sem escopo já definido pela URL e com ao menos uma chave no corpo: acha a empresa ou responde 404.
+        # Sem chave nenhuma (ex.: GET de verificação da Meta) segue como antes, sem escopo.
+        def self.around(controller, rota)
+          return yield if Chordata::MultiEmpresa::Current.empresa_id.present?
+
+          candidatas = Array(rota[:candidatas].call(controller)).select { |_t, _c, valor| valor.present? }
+          return yield if candidatas.empty?
+
+          id = candidatas.each do |tabela, coluna, valor|
+            achada = MultiEmpresa.resolver_empresa_do_canal(tabela, coluna, valor)
+            break achada if achada
+          end
+          return controller.render(json: { error: 'Canal não encontrado' }, status: :not_found) unless id.is_a?(String)
+
+          EvoExtensionPoints::RuntimeContext.with_scope(id) { yield }
+        end
+      end
 
       module Filtro
         def self.around(controller, rota)
@@ -64,6 +106,18 @@ module Chordata
           end
           # prepend: tem de rodar ANTES de set_web_widget & cia, que já consultam o banco.
           klass.prepend_around_action(:chordata_escopo_canal)
+        end
+
+        PAYLOAD.each do |rota|
+          klass = rota[:controller].safe_constantize
+          next unless klass
+          next if klass.method_defined?(:chordata_escopo_payload)
+
+          klass.define_method(:chordata_escopo_payload) do |&bloco|
+            Chordata::MultiEmpresa::Canais::FiltroPayload.around(self, rota, &bloco)
+          end
+          # Depois do filtro por URL (se houver) e antes do restante; a verificação GET da Meta não tem chave.
+          klass.prepend_around_action(:chordata_escopo_payload)
         end
       end
     end

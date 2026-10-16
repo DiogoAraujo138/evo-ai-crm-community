@@ -30,6 +30,7 @@ module Chordata
           conn.transaction do
             conn.execute('DROP FUNCTION IF EXISTS chordata_resolver_empresa(text, text, text)')
             conn.execute('DROP TABLE IF EXISTS chordata_chaves_resolucao')
+            restaurar_indices_unicos(conn)
             Tabelas.empresa.each { |tabela| desisolar_tabela(conn, tabela) }
             conn.execute('DROP TABLE IF EXISTS empresa_usuarios')
             conn.execute('DROP TABLE IF EXISTS empresas CASCADE')
@@ -49,6 +50,16 @@ module Chordata
         end
 
         private
+
+        # Devolve os índices únicos originais (tira empresa_id dos `*_empresa`) antes de apagar a coluna.
+        def restaurar_indices_unicos(conn)
+          conn.select_rows("SELECT i.relname, pg_get_indexdef(ix.indexrelid) FROM pg_index ix JOIN pg_class i ON i.oid = ix.indexrelid WHERE ix.indisunique AND i.relname LIKE '%\_empresa'").each do |nome, definicao|
+            original = nome.sub(/_empresa\z/, '')
+            novo = definicao.sub('USING btree (empresa_id, ', 'USING btree (').sub(/INDEX \S+ ON/, "INDEX #{conn.quote_column_name(original)} ON")
+            conn.execute("DROP INDEX IF EXISTS #{conn.quote_table_name(nome)}")
+            conn.execute(novo)
+          end
+        end
 
         def papel?(conn, nome)
           conn.select_value("SELECT 1 FROM pg_roles WHERE rolname = #{conn.quote(nome)}").present?

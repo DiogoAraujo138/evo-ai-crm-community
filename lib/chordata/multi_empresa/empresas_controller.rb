@@ -52,7 +52,11 @@ module Chordata
         empresa = Empresa.find(params[:id])
         return negar unless gestor_de?(empresa)
 
-        dados = empresa.vinculos.order(:created_at).map { |v| { user_id: v.user_id, papel: v.papel } }
+        vinculos = empresa.vinculos.order(:created_at).to_a
+        usuarios = ::User.where(id: vinculos.map(&:user_id)).index_by(&:id)
+        dados = vinculos.map do |v|
+          { user_id: v.user_id, papel: v.papel, nome: usuarios[v.user_id]&.name, email: usuarios[v.user_id]&.email }
+        end
         success_response(data: dados, message: 'Vínculos')
       end
 

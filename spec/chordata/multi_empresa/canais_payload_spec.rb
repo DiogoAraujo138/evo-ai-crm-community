@@ -8,8 +8,13 @@ RSpec.describe Chordata::MultiEmpresa::Canais::FiltroPayload do
   let(:rota) { Chordata::MultiEmpresa::Canais::PAYLOAD.find { |r| r[:controller] == 'Webhooks::WhatsappController' } }
   let(:whatsapp) { described_class }
 
-  def controller_com(params)
-    double('controller', params: ActionController::Parameters.new(params), render: nil)
+  def controller_com(params, corpo = nil)
+    double('controller', params: ActionController::Parameters.new(params), render: nil,
+                         request: double(raw_post: corpo.to_s))
+  end
+
+  def rota_de(nome)
+    Chordata::MultiEmpresa::Canais::PAYLOAD.find { |r| r[:controller] == nome }
   end
 
   def candidatas(params)
@@ -65,5 +70,37 @@ RSpec.describe Chordata::MultiEmpresa::Canais::FiltroPayload do
     rodou = false
     Chordata::MultiEmpresa::Current.set(empresa_id: empresa) { whatsapp.around(controller_com(instance: 'x', event: 'e'), rota) { rodou = true } }
     expect(rodou).to be(true)
+  end
+
+  describe 'Evolution Hub, Gmail e SendGrid' do
+    it 'Hub: eventos da Meta repassados usam as mesmas chaves; ciclo de vida do Hub fica sem chave' do
+      hub = rota_de('Webhooks::EvolutionHubController')
+      wa = { object: 'whatsapp_business_account', entry: [{ id: 'waba-9', changes: [{ value: { metadata: { phone_number_id: 'pn-9' } } }] }] }
+      c = controller_com({}, wa.to_json)
+      expect(hub[:candidatas].call(c).first).to eq(['channel_whatsapp', 'provider_config->>phone_number_id', 'pn-9'])
+      expect(hub[:candidatas].call(controller_com({}, { object: 'page', entry: [{ id: 'p1' }] }.to_json)))
+        .to eq([['channel_facebook_pages', 'page_id', 'p1']])
+      expect(hub[:candidatas].call(controller_com({}, { object: 'instagram', entry: [{ id: 'i1' }] }.to_json)))
+        .to eq([['channel_instagram', 'instagram_id', 'i1']])
+      expect(hub[:candidatas].call(controller_com({}, { event_type: 'channel_connected' }.to_json))).to be_empty
+      expect(hub[:candidatas].call(controller_com({}, 'não é json'))).to be_empty
+    end
+
+    it 'Gmail: lê o e-mail do Pub/Sub (message.data em base64) ou de campos soltos' do
+      gmail = rota_de('Webhooks::GmailController')
+      dados = Base64.strict_encode64({ emailAddress: 'caixa@exemplo.invalid', historyId: 1 }.to_json)
+      corpo = { message: { data: dados, messageId: 'm1' } }.to_json
+      expect(gmail[:candidatas].call(controller_com({}, corpo))).to eq([['channel_email', 'email', 'caixa@exemplo.invalid']])
+      expect(gmail[:candidatas].call(controller_com({ emailAddress: 'solta@exemplo.invalid' }, '{}')).first.last).to eq('solta@exemplo.invalid')
+      expect(gmail[:candidatas].call(controller_com({}, 'lixo')).first.last).to be_nil
+    end
+
+    it 'SendGrid: usa o message_id do primeiro evento (direto ou em custom_args)' do
+      sg = rota_de('Webhooks::SendgridController')
+      expect(sg[:candidatas].call(controller_com({}, [{ event: 'delivered', custom_args: { message_id: 'msg-1' } }].to_json)))
+        .to eq([['messages', 'id', 'msg-1']])
+      expect(sg[:candidatas].call(controller_com({}, [{ message_id: 'msg-2' }, { message_id: 'msg-3' }].to_json)).first.last).to eq('msg-2')
+      expect(sg[:candidatas].call(controller_com({}, 'nada')).first.last).to be_nil
+    end
   end
 end

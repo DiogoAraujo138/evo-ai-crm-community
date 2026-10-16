@@ -124,12 +124,15 @@ module Chordata
         %w[channel_whatsapp provider_config->>instance_name]
       ].freeze
 
+      # Chaves por id de registro (PK): o webhook traz o id de uma mensagem nossa (ex.: custom_args do SendGrid).
+      CHAVES_POR_ID = [%w[messages id]].freeze
+
       # Chaves que o webhook usa para achar a empresa (função chordata_resolver_empresa).
       def self.chaves_de_resolucao
         UNICOS.flat_map do |tabela, indices|
           indices.select { |_cols, tipo| tipo == :global }.keys.reject { |c| c.include?(',') }
                  .map { |coluna| [tabela, coluna] }
-        end + CHAVES_EM_JSON
+        end + CHAVES_EM_JSON + CHAVES_POR_ID
       end
     end
   end

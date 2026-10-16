@@ -26,10 +26,9 @@ module Chordata
       # resolvida, qualquer acesso a dado falha (SemEscopo/RLS), nunca vaza. Cada um precisa ler o
       # identificador do payload e chamar MultiEmpresa.resolver_empresa_do_canal.
       PENDENTES = {
-        'Webhooks::GmailController' => 'channel_email.email (mensagem do Pub/Sub)',
-        'Webhooks::SendgridController' => 'channel_sendgrid (destinatário)',
-        'Api::V1::WebhooksController#twitter_events' => 'channel_twitter_profiles.profile_id',
-        'Webhooks::EvolutionHubController' => 'instância do Evolution Hub'
+        # Eventos de ciclo de vida do Evolution Hub (channel_connected...): o formato não traz chave de canal conhecida.
+        'Webhooks::EvolutionHubController (event_type de ciclo de vida)' => 'sem chave de canal no payload'
+        # Api::V1::WebhooksController#twitter_events: a rota existe, mas a ação não está implementada no upstream.
       }.freeze
       # WhatsApp (todos os provedores sem phone_number na URL), Instagram e Facebook saíram daqui: ver PAYLOAD.
       # Limitação: Meta pode agrupar várias páginas/contas em um mesmo POST; a empresa vem da PRIMEIRA entrada e
@@ -56,8 +55,63 @@ module Chordata
         { controller: 'Webhooks::InstagramController',
           candidatas: ->(c) { [['channel_instagram', 'instagram_id', c.params.dig(:entry, 0, :id)]] } },
         { controller: 'Webhooks::FacebookController',
-          candidatas: ->(c) { [['channel_facebook_pages', 'page_id', c.params.dig(:entry, 0, :id)]] } }
+          candidatas: ->(c) { [['channel_facebook_pages', 'page_id', c.params.dig(:entry, 0, :id)]] } },
+        { controller: 'Webhooks::EvolutionHubController',
+          candidatas: ->(c) { Canais.candidatas_meta(Canais.corpo_json(c)) } },
+        { controller: 'Webhooks::GmailController',
+          candidatas: ->(c) { [['channel_email', 'email', Canais.email_do_pubsub(c)]] } },
+        { controller: 'Webhooks::SendgridController',
+          candidatas: ->(c) { [['messages', 'id', Canais.mensagem_do_sendgrid(c)]] } }
       ].freeze
+
+      # Corpo bruto como JSON (Hub, SendGrid, Gmail); nil se não for JSON.
+      def self.corpo_json(controller)
+        JSON.parse(controller.request.raw_post.to_s)
+      rescue JSON::ParserError
+        nil
+      end
+
+      # Candidatas de um evento da Meta (WhatsApp Business, Página, Instagram) dado o hash do payload.
+      def self.candidatas_meta(corpo)
+        return [] unless corpo.is_a?(Hash)
+
+        entrada = Array(corpo['entry']).first || {}
+        case corpo['object'].to_s.downcase
+        when 'whatsapp_business_account'
+          phone_id = entrada.dig('changes', 0, 'value', 'metadata', 'phone_number_id')
+          [['channel_whatsapp', 'provider_config->>phone_number_id', phone_id],
+           ['channel_whatsapp', 'provider_config->>waba_id', entrada['id']],
+           ['channel_whatsapp', 'provider_config->>business_account_id', entrada['id']]]
+        when 'page' then [['channel_facebook_pages', 'page_id', entrada['id']]]
+        when 'instagram' then [['channel_instagram', 'instagram_id', entrada['id']]]
+        else []
+        end
+      end
+
+      # E-mail do Gmail no Pub/Sub: message.data (base64 de JSON) ou campos soltos.
+      def self.email_do_pubsub(controller)
+        corpo = corpo_json(controller)
+        dados = corpo.is_a?(Hash) ? corpo['message'] : nil
+        if dados.is_a?(Hash) && dados['data'].present?
+          decodificado = begin
+            JSON.parse(Base64.decode64(dados['data']))
+          rescue JSON::ParserError, ArgumentError
+            nil
+          end
+          email = decodificado.is_a?(Hash) ? (decodificado['emailAddress'] || decodificado['email_address']) : nil
+          return email if email.present?
+        end
+        p = controller.params
+        p[:emailAddress].presence || p[:email_address].presence || (corpo.is_a?(Hash) ? (corpo['emailAddress'] || corpo['email_address']) : nil)
+      end
+
+      # Id da primeira mensagem nossa citada num lote de eventos do SendGrid (custom_args.message_id).
+      def self.mensagem_do_sendgrid(controller)
+        eventos = corpo_json(controller)
+        Array(eventos.is_a?(Array) ? eventos : [eventos]).filter_map do |e|
+          e.is_a?(Hash) ? (e['message_id'] || e.dig('custom_args', 'message_id')) : nil
+        end.first
+      end
 
       module FiltroPayload
         # Sem escopo já definido pela URL e com ao menos uma chave no corpo: acha a empresa ou responde 404.

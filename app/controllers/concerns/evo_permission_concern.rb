@@ -83,9 +83,7 @@ module EvoPermissionConcern
     cache_key = "user:#{user_id}:#{scope_id}:#{permission}"
     return Current.evo_permission_cache[cache_key] if Current.evo_permission_cache.key?(cache_key)
 
-    has_perm = EvoExtensionPoints::PermissionResolver.allowed?(
-      user_id: user_id, permission_key: permission, scope_id: scope_id
-    )
+    has_perm = remote_permission_allowed?(user_id, permission, scope_id)
     Current.evo_permission_cache[cache_key] = has_perm
 
     has_perm
@@ -94,6 +92,22 @@ module EvoPermissionConcern
 
     # Em caso de erro, negar acesso por seguranca
     false
+  end
+
+  # Cross-request cache for the auth-service verdict, so each request does not pay
+  # an auth round trip per permission. Only GRANTS are cached: the resolver returns
+  # false both for "denied" and for "auth unreachable", so caching a false would
+  # lock a legitimate user out for the whole TTL after a transient auth error.
+  # A revoked permission stays effective for at most AUTHZ_REMOTE_CACHE_TTL.
+  def remote_permission_allowed?(user_id, permission, scope_id)
+    store_key = "evo_auth:permission:#{user_id}:#{scope_id}:#{permission}"
+    return true if Rails.cache.read(store_key)
+
+    allowed = EvoExtensionPoints::PermissionResolver.allowed?(
+      user_id: user_id, permission_key: permission, scope_id: scope_id
+    )
+    Rails.cache.write(store_key, true, expires_in: AUTHZ_REMOTE_CACHE_TTL) if allowed == true
+    allowed
   end
 
   def render_permission_denied

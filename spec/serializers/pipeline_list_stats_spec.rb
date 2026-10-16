@@ -21,6 +21,16 @@ RSpec.describe PipelineListStats do
     item
   end
 
+  # Counts PipelineItem records Active Record builds while the block runs.
+  def instantiated_pipeline_items
+    count = 0
+    callback = lambda do |*, payload|
+      count += payload[:record_count].to_i if payload[:class_name] == 'PipelineItem'
+    end
+    ActiveSupport::Notifications.subscribed(callback, 'instantiation.active_record') { yield }
+    count
+  end
+
   before do
     add_item(stage_a, { 'services' => [{ 'name' => 'x', 'value' => '100.10' }, { 'name' => 'y', 'value' => '0.20' },
                                        { 'name' => 'z', 'value' => 'abc' }] })
@@ -61,8 +71,8 @@ RSpec.describe PipelineListStats do
   end
 
   it 'does not instantiate pipeline items' do
-    expect(PipelineItem).not_to receive(:instantiate)
+    built = instantiated_pipeline_items { described_class.new([pipeline.id]) }
 
-    described_class.new([pipeline.id])
+    expect(built).to eq(0)
   end
 end

@@ -121,19 +121,21 @@ module Dashboard
     end
 
     def build_pipeline
-      pipeline_items = scoped_pipeline_items.includes(:pipeline_stage)
-      stages = pipeline_items.group_by(&:pipeline_stage).map do |stage, stage_items|
+      rows = pipeline_item_rows
+      stages_by_id = PipelineStage.where(id: rows.map(&:first).uniq).index_by(&:id)
+      stages = rows.group_by { |stage_id, _inbox_id, _value| stages_by_id[stage_id]&.id }.map do |stage_id, stage_rows|
+        stage = stages_by_id[stage_id]
         {
           id: stage&.id,
           name: stage&.name || 'Sem estágio',
-          count: stage_items.count,
-          value: stage_items.sum(&:services_total_value).round(2)
+          count: stage_rows.size,
+          value: stage_rows.sum(&:last).round(2)
         }
       end
 
       {
-        total: pipeline_items.count,
-        total_value: pipeline_items.sum(&:services_total_value).round(2),
+        total: rows.size,
+        total_value: rows.sum(&:last).round(2),
         stages: stages.sort_by { |item| -item[:count] }
       }
     end
@@ -318,15 +320,23 @@ module Dashboard
     def pipeline_value_by_inbox
       values = Hash.new(0.0)
 
-      scoped_pipeline_items.includes(:conversation).find_in_batches(batch_size: 1000) do |batch|
-        batch.each do |item|
-          next unless item.conversation&.inbox_id
-
-          values[item.conversation.inbox_id] += item.services_total_value
-        end
+      pipeline_item_rows.each do |_stage_id, inbox_id, value|
+        values[inbox_id] += value if inbox_id
       end
 
       values
+    end
+
+    # One query for everything the pipeline and channel blocks need from the leads:
+    # [stage_id, conversation inbox_id, services total]. Loading the PipelineItem records
+    # (plus their stage and conversation) just to read these three values was the cost.
+    # The inbox comes from a subselect because the scope may already join conversations.
+    def pipeline_item_rows
+      @pipeline_item_rows ||= scoped_pipeline_items.pluck(
+        :pipeline_stage_id,
+        Arel.sql('(SELECT conversations.inbox_id FROM conversations WHERE conversations.id = pipeline_items.conversation_id)'),
+        Arel.sql("pipeline_items.custom_fields->'services'")
+      ).map { |stage_id, inbox_id, services| [stage_id, inbox_id, PipelineItem.services_value(services)] }
     end
 
     def average_event_value(events_scope, event_name)

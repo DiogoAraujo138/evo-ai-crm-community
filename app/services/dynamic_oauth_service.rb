@@ -85,7 +85,7 @@ class DynamicOauthService
     return [] unless user
 
     [{
-      account_name: GlobalConfigService.load('BRAND_NAME', 'Evo CRM'),
+      account_name: GlobalConfigService.load('BRAND_NAME', 'CRM Chordata'),
       dynamic_client_id: generate_dynamic_client_id('default')
     }]
   end

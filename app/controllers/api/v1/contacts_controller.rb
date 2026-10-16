@@ -430,10 +430,9 @@ class Api::V1::ContactsController < Api::V1::BaseController
                                              ])
                                    .preload(:labels, :companies, :contact_companies, :company_contacts)
 
-    # Also preload pipeline items directly associated with contacts
-    contact_ids = contacts_with_associations.map(&:id)
-    PipelineItem.where(contact_id: contact_ids).includes(:pipeline, :pipeline_stage).load
-
+    # Do not materialize the relation here (e.g. `.map(&:id)`): pagination is applied
+    # afterwards by Api::V1::BaseController#paginate_instance_variables, and loading it
+    # early would fetch every contact with its conversations before cutting to one page.
     return contacts_with_associations.includes([{ contact_inboxes: [:inbox] }]) if @include_contact_inboxes
 
     contacts_with_associations

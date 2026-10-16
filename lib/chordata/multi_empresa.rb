@@ -7,6 +7,7 @@
 require_relative 'multi_empresa/tabelas'
 require_relative 'multi_empresa/esquema'
 require_relative 'multi_empresa/canais'
+require_relative 'multi_empresa/rotas'
 
 module Chordata
   module MultiEmpresa
@@ -70,6 +71,7 @@ module Chordata
     # Liga tudo na aplicação (chamado pelo initializer só com MULTI_EMPRESA=on).
     def self.ligar!
       install!
+      Rotas.ligar!
       ActiveSupport.on_load(:active_job) do
         require_relative 'multi_empresa/requisicao'
         include Chordata::MultiEmpresa::EscopoDoJob unless include?(Chordata::MultiEmpresa::EscopoDoJob)
@@ -92,6 +94,7 @@ module Chordata
       end
       base.around_action(:chordata_escopo)
       Chordata::MultiEmpresa::Canais.ligar!
+      require_relative 'multi_empresa/empresas_controller'
     end
 
     def self.empresa_atual!

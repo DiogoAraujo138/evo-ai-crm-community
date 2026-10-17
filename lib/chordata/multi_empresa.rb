@@ -113,6 +113,8 @@ module Chordata
       Chordata::MultiEmpresa::TempoReal.ligar!
       require_relative 'multi_empresa/sidekiq'
       Chordata::MultiEmpresa::Sidekiq.ligar!
+      require_relative 'multi_empresa/busca'
+      Chordata::MultiEmpresa::Busca.ligar!
       require_relative 'multi_empresa/empresas_controller'
     end
 

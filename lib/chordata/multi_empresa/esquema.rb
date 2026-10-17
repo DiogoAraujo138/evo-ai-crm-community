@@ -23,11 +23,14 @@ module Chordata
             Tabelas.empresa.each { |tabela| isolar_tabela(conn, tabela) }
             converter_indices_unicos(conn)
             criar_resolvedor(conn)
+            criar_busca_de_contatos(conn)
           end
         end
 
         def remover!(conn = ActiveRecord::Base.connection)
           conn.transaction do
+            conn.execute('DROP FUNCTION IF EXISTS chordata_buscar_contatos(text)')
+            conn.execute('DROP INDEX IF EXISTS index_contacts_on_company_name_trgm')
             conn.execute('DROP FUNCTION IF EXISTS chordata_resolver_empresa(text, text, text)')
             conn.execute('DROP TABLE IF EXISTS chordata_chaves_resolucao')
             restaurar_indices_unicos(conn)
@@ -47,6 +50,7 @@ module Chordata
           conn.execute("GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO #{nome_q}")
           conn.execute("GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO #{nome_q}")
           conn.execute("GRANT EXECUTE ON FUNCTION chordata_resolver_empresa(text, text, text) TO #{nome_q}")
+          conn.execute("GRANT EXECUTE ON FUNCTION chordata_buscar_contatos(text) TO #{nome_q}")
         end
 
         private
@@ -159,6 +163,28 @@ module Chordata
         # Colunas reais do índice, na ordem (ignora expressões), como "a,b".
         def chave_sql(colunas)
           "(SELECT string_agg(a.attname, ',' ORDER BY k.ord) FROM unnest(ix.indkey) WITH ORDINALITY k(attnum, ord) "             "JOIN pg_attribute a ON a.attrelid = ix.indrelid AND a.attnum = k.attnum) = "             "#{ActiveRecord::Base.connection.quote(colunas)}"
+        end
+
+        # Busca de contatos rápida SEM abrir mão do isolamento. Com RLS o Postgres não usa índice para LIKE/ILIKE/->> (os
+        # operadores não são "leakproof"): a busca por trecho varria todas as linhas da empresa (226 ms com 100 mil contatos
+        # contra 7 ms sem RLS). Esta função roda como o papel do resolvedor (sem RLS) mas filtra a empresa da SESSÃO de forma
+        # explícita, e devolve só os ids; o CRM filtra o resto por `id IN (...)`, que continua sob RLS. Sem empresa na sessão
+        # não devolve nada. O padrão (`%termo%`) é o mesmo que o CRM já montava.
+        def criar_busca_de_contatos(conn)
+          conn.execute(<<~SQL)
+            CREATE INDEX IF NOT EXISTS index_contacts_on_company_name_trgm
+              ON contacts USING gin ((additional_attributes ->> 'company_name') gin_trgm_ops);
+            CREATE OR REPLACE FUNCTION chordata_buscar_contatos(p_padrao text)
+            RETURNS SETOF uuid LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public, pg_temp AS $fn$
+              SELECT c.id FROM contacts c
+              WHERE c.empresa_id = chordata_empresa_atual()
+                AND (c.name ILIKE p_padrao OR c.email ILIKE p_padrao OR c.phone_number ILIKE p_padrao
+                     OR c.identifier LIKE p_padrao OR c.additional_attributes ->> 'company_name' ILIKE p_padrao)
+            $fn$;
+            REVOKE ALL ON FUNCTION chordata_buscar_contatos(text) FROM PUBLIC;
+            ALTER FUNCTION chordata_buscar_contatos(text) OWNER TO #{PAPEL_RESOLVEDOR};
+            GRANT SELECT (id, empresa_id, name, email, phone_number, identifier, additional_attributes) ON contacts TO #{PAPEL_RESOLVEDOR};
+          SQL
         end
 
         # Função que descobre a empresa de um canal pela chave do webhook, sem usuário logado.

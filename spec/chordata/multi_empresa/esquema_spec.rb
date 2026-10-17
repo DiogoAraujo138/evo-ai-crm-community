@@ -3,6 +3,7 @@
 require 'rails_helper'
 require Rails.root.join('lib/chordata/multi_empresa')
 require Rails.root.join('lib/chordata/multi_empresa/requisicao')
+require Rails.root.join('lib/chordata/multi_empresa/busca')
 
 # Roda em um processo próprio (inclui o escopo nos modelos, o que não se desfaz):
 #   rspec spec/chordata/multi_empresa/esquema_spec.rb
@@ -346,6 +347,44 @@ RSpec.describe 'Multi-empresa: esquema, isolamento e escopo (70 tabelas)' do
 
     it 'sem usuário nem serviço é recusado' do
       expect { resolver.resolver!(usuario: nil, papel: nil, cabecalho: nil) }.to raise_error(resolver::Recusada)
+    end
+  end
+
+  describe 'busca de contatos (função chordata_buscar_contatos)' do
+    it 'devolve só os contatos da empresa da sessão e nada quando não há empresa' do
+      a = empresa_nova("busca-a-#{SecureRandom.hex(3)}")
+      b = empresa_nova("busca-b-#{SecureRandom.hex(3)}")
+      marca = "zzbusca#{SecureRandom.hex(3)}"
+      id_a = na_empresa(a) { Contact.create!(name: "#{marca} Ana", email: "ana-#{marca}@exemplo.invalid").id }
+      id_b = na_empresa(b) { Contact.create!(name: "#{marca} Bia", email: "bia-#{marca}@exemplo.invalid").id }
+      padrao = "%#{marca}%"
+
+      de_a = na_empresa(a) { como_app { conn.select_values("SELECT chordata_buscar_contatos(#{conn.quote(padrao)})") } }
+      de_b = na_empresa(b) { como_app { conn.select_values("SELECT chordata_buscar_contatos(#{conn.quote(padrao)})") } }
+      sem = como_app { conn.select_values("SELECT chordata_buscar_contatos(#{conn.quote(padrao)})") }
+
+      expect(de_a).to eq([id_a])
+      expect(de_b).to eq([id_b])
+      expect(sem).to be_empty
+    end
+
+    it 'acha por nome, e-mail, telefone, identificador e nome da empresa do contato (mesmos campos da busca original)' do
+      a = empresa_nova("busca-c-#{SecureRandom.hex(3)}")
+      m = "zzcampo#{SecureRandom.hex(3)}"
+      ids = na_empresa(a) do
+        [Contact.create!(name: "#{m}-nome"),
+         Contact.create!(name: 'x1', email: "#{m}-email@exemplo.invalid"),
+         Contact.create!(name: 'x2', phone_number: "+55119#{m[-6..].hex.to_s.rjust(7, '0')}"),
+         Contact.create!(name: 'x3', identifier: "#{m}-ident"),
+         Contact.create!(name: 'x4', additional_attributes: { 'company_name' => "#{m}-empresa" })].map(&:id)
+      end
+      achados = na_empresa(a) { como_app { conn.select_values("SELECT chordata_buscar_contatos(#{conn.quote("%#{m}%")})") } }
+      expect(achados).to match_array(ids - [ids[2]]) # o telefone é número, não casa com o texto
+    end
+
+    it 'o controller ainda usa o mesmo filtro do upstream (se mudar, revisar Busca::Contatos)' do
+      fonte = File.read(Rails.root.join('app/controllers/api/v1/contacts_controller.rb'))
+      expect(fonte).to include(Chordata::MultiEmpresa::Busca::PADRAO_UPSTREAM)
     end
   end
 

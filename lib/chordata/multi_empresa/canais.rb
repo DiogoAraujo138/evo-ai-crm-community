@@ -32,8 +32,7 @@ module Chordata
         # Pesquisa de satisfação: o :id é o uuid público da conversa.
         { controller: 'Public::Api::V1::CsatSurveyController', obrigatoria: true, tabela: 'conversations', coluna: 'uuid',
           chave: ->(c) { c.params[:id] } }
-        # Public::Api::V1::LeadsController NÃO está aqui: autentica por chave de API (AccessToken, global) e a empresa não
-        # sai da chave; precisa de decisão (cabeçalho X-Evo-Tenant-Id + vínculo do dono da chave). Falha fechado hoje.
+        # Public::Api::V1::LeadsController: ver o módulo Leads (empresa pelo cabeçalho + vínculo do dono da chave).
       ].freeze
 
       # Webhooks cuja chave só aparece no CORPO do payload do provedor. Ainda NÃO ligados: sem empresa
@@ -146,6 +145,25 @@ module Chordata
         end
       end
 
+      # Leads pela API pública autenticam por chave de API (AccessToken, tabela global): a chave não diz a empresa. Regra: o dono
+      # da chave tem de ser um USUÁRIO e a empresa vem do cabeçalho X-Evo-Tenant-Id (ou é a única à qual ele pertence), validada
+      # pelas mesmas regras da API normal (vínculo em empresa_usuarios; super_admin escolhe). Qualquer outro caso falha fechado.
+      module Leads
+        def self.around(controller)
+          token = controller.instance_variable_get(:@access_token)
+          dono = token&.owner
+          unless dono.is_a?(::User)
+            return controller.render(json: { success: false, error: 'Chave de API sem usuário: não define a empresa' }, status: :forbidden)
+          end
+
+          papel = dono.roles.pluck(:key).include?('super_admin') ? 'super_admin' : nil
+          id = Requisicao.resolver!(usuario: dono, papel: papel, cabecalho: controller.request.headers[Requisicao::CABECALHO])
+          EvoExtensionPoints::RuntimeContext.with_scope(id) { yield }
+        rescue Requisicao::Recusada => e
+          controller.render(json: { success: false, error: e.message }, status: e.status)
+        end
+      end
+
       module Filtro
         def self.around(controller, rota)
           valor = rota[:chave].call(controller)
@@ -175,6 +193,13 @@ module Chordata
           end
           # prepend: tem de rodar ANTES de set_web_widget & cia, que já consultam o banco.
           klass.prepend_around_action(:chordata_escopo_canal)
+        end
+
+        leads = 'Public::Api::V1::LeadsController'.safe_constantize
+        if leads && !leads.method_defined?(:chordata_escopo_lead)
+          leads.define_method(:chordata_escopo_lead) { |&bloco| Chordata::MultiEmpresa::Canais::Leads.around(self, &bloco) }
+          # append: depois do before_action authenticate_with_api_key! da base (que define @access_token).
+          leads.append_around_action(:chordata_escopo_lead)
         end
 
         PAYLOAD.each do |rota|

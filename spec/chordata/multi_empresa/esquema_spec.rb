@@ -415,6 +415,43 @@ RSpec.describe 'Multi-empresa: esquema, isolamento e escopo (70 tabelas)' do
     end
   end
 
+  describe 'leads pela API pública (empresa pela chave do dono + cabeçalho)' do
+    let(:leads) { Chordata::MultiEmpresa::Canais::Leads }
+
+    def controller_falso(owner, cabecalho = nil)
+      token = Struct.new(:owner).new(owner)
+      headers = { Chordata::MultiEmpresa::Requisicao::CABECALHO => cabecalho }
+      requisicao = Struct.new(:headers).new(headers)
+      respostas = []
+      ctrl = Object.new
+      ctrl.instance_variable_set(:@access_token, token)
+      ctrl.define_singleton_method(:request) { requisicao }
+      ctrl.define_singleton_method(:render) { |**args| respostas << args }
+      [ctrl, respostas]
+    end
+
+    it 'dono vinculado a uma empresa só: usa essa empresa; pedindo outra é recusado; chave de não-usuário é recusada' do
+      a = empresa_nova("lead-a-#{SecureRandom.hex(3)}")
+      b = empresa_nova("lead-b-#{SecureRandom.hex(3)}")
+      uid = usuario_novo("lead-#{SecureRandom.hex(3)}@exemplo.invalid")
+      conn.execute("INSERT INTO empresa_usuarios (empresa_id, user_id, papel) VALUES (#{conn.quote(a)}, #{conn.quote(uid)}, 'agent')")
+      dono = User.find(uid)
+
+      visto = nil
+      ctrl, resp = controller_falso(dono)
+      leads.around(ctrl) { visto = EvoExtensionPoints::RuntimeContext.current_scope_id }
+      expect([visto, resp]).to eq([a, []])
+
+      ctrl, resp = controller_falso(dono, b)
+      leads.around(ctrl) { raise 'não deveria executar' }
+      expect(resp.first[:status]).to eq(:forbidden)
+
+      ctrl, resp = controller_falso(Object.new)
+      leads.around(ctrl) { raise 'não deveria executar' }
+      expect(resp.first[:status]).to eq(:forbidden)
+    end
+  end
+
   describe 'jobs em segundo plano' do
     let(:job_class) do
       Class.new(ActiveJob::Base) do

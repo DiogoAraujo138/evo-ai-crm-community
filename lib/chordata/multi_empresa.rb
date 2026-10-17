@@ -111,6 +111,8 @@ module Chordata
       Chordata::MultiEmpresa::Canais.ligar!
       Chordata::MultiEmpresa::BotRuntime.ligar!
       Chordata::MultiEmpresa::TempoReal.ligar!
+      require_relative 'multi_empresa/sidekiq'
+      Chordata::MultiEmpresa::Sidekiq.ligar!
       require_relative 'multi_empresa/empresas_controller'
     end
 

@@ -30,6 +30,8 @@ module Chordata
         def remover!(conn = ActiveRecord::Base.connection)
           conn.transaction do
             conn.execute('DROP FUNCTION IF EXISTS chordata_buscar_contatos(text)')
+            conn.execute('DROP FUNCTION IF EXISTS chordata_contato_email_existe(text, uuid)')
+            conn.execute('DROP INDEX IF EXISTS index_contacts_on_empresa_lower_email')
             conn.execute('DROP INDEX IF EXISTS index_contacts_on_company_name_trgm')
             conn.execute('DROP FUNCTION IF EXISTS chordata_resolver_empresa(text, text, text)')
             conn.execute('DROP TABLE IF EXISTS chordata_chaves_resolucao')
@@ -51,6 +53,7 @@ module Chordata
           conn.execute("GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO #{nome_q}")
           conn.execute("GRANT EXECUTE ON FUNCTION chordata_resolver_empresa(text, text, text) TO #{nome_q}")
           conn.execute("GRANT EXECUTE ON FUNCTION chordata_buscar_contatos(text) TO #{nome_q}")
+          conn.execute("GRANT EXECUTE ON FUNCTION chordata_contato_email_existe(text, uuid) TO #{nome_q}")
         end
 
         private
@@ -184,6 +187,19 @@ module Chordata
             REVOKE ALL ON FUNCTION chordata_buscar_contatos(text) FROM PUBLIC;
             ALTER FUNCTION chordata_buscar_contatos(text) OWNER TO #{PAPEL_RESOLVEDOR};
             GRANT SELECT (id, empresa_id, name, email, phone_number, identifier, additional_attributes) ON contacts TO #{PAPEL_RESOLVEDOR};
+
+            -- Validação "e-mail único sem diferenciar maiúsculas" do modelo Contact: o upstream faz LOWER(email) = LOWER(?) e não há
+            -- índice para isso; com RLS ainda varria as linhas de TODAS as empresas (1 s com 400 mil contatos), a cada criação
+            -- e a cada linha de importação. Mesma regra, mas com índice e a empresa da sessão filtrada de forma explícita.
+            CREATE INDEX IF NOT EXISTS index_contacts_on_empresa_lower_email ON contacts (empresa_id, lower(email));
+            CREATE OR REPLACE FUNCTION chordata_contato_email_existe(p_email text, p_excluir uuid)
+            RETURNS boolean LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public, pg_temp AS $fn$
+              SELECT EXISTS (SELECT 1 FROM contacts c
+                             WHERE c.empresa_id = chordata_empresa_atual() AND lower(c.email) = lower(p_email)
+                               AND (p_excluir IS NULL OR c.id <> p_excluir))
+            $fn$;
+            REVOKE ALL ON FUNCTION chordata_contato_email_existe(text, uuid) FROM PUBLIC;
+            ALTER FUNCTION chordata_contato_email_existe(text, uuid) OWNER TO #{PAPEL_RESOLVEDOR};
           SQL
         end
 

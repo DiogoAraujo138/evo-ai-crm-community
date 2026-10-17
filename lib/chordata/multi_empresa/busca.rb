@@ -41,6 +41,36 @@ module Chordata
         end
       end
 
+      # Troca a validação de e-mail único (LOWER(email) = LOWER(?), sem índice, e que o RLS faz varrer tudo) por
+      # chordata_contato_email_existe(). Mesma regra e mesma mensagem ("has already been taken").
+      module EmailUnico
+        def self.ligar!
+          klass = 'Contact'.safe_constantize
+          return if klass.nil? || klass.method_defined?(:chordata_email_unico)
+
+          antigo = klass._validate_callbacks.find do |cb|
+            cb.filter.is_a?(ActiveRecord::Validations::UniquenessValidator) && cb.filter.attributes == [:email]
+          end
+          klass._validate_callbacks.delete(antigo) if antigo
+          klass.validate :chordata_email_unico
+          klass.define_method(:chordata_email_unico) do
+            return if email.blank? || !(new_record? || will_save_change_to_email?)
+            return unless Chordata::MultiEmpresa::Busca.funcao_email_instalada?
+
+            existe = self.class.connection.select_value(
+              self.class.sanitize_sql_array(['SELECT chordata_contato_email_existe(?, ?)', email, id])
+            )
+            errors.add(:email, :taken, value: email) if existe == true
+          end
+        end
+      end
+
+      def self.funcao_email_instalada?
+        return @funcao_email_instalada if @funcao_email_instalada
+
+        @funcao_email_instalada = ActiveRecord::Base.connection.select_value("SELECT to_regprocedure('chordata_contato_email_existe(text,uuid)') IS NOT NULL") == true
+      end
+
       # Banco ainda sem a função (código publicado antes de rodar o instalador): cai na busca original, mais lenta.
       def self.funcao_instalada?
         return @funcao_instalada if @funcao_instalada
@@ -53,6 +83,7 @@ module Chordata
         return if klass.nil? || klass.ancestors.include?(Contatos)
 
         klass.prepend(Contatos)
+        EmailUnico.ligar!
       end
     end
   end

@@ -388,6 +388,33 @@ RSpec.describe 'Multi-empresa: esquema, isolamento e escopo (70 tabelas)' do
     end
   end
 
+  describe 'e-mail único do contato (função chordata_contato_email_existe)' do
+    before { Chordata::MultiEmpresa::Busca::EmailUnico.ligar! }
+
+    it 'mantém a regra do upstream: único por empresa, sem diferenciar maiúsculas; outra empresa pode repetir' do
+      a = empresa_nova("email-a-#{SecureRandom.hex(3)}")
+      b = empresa_nova("email-b-#{SecureRandom.hex(3)}")
+      endereco = "dup-#{SecureRandom.hex(3)}@exemplo.invalid"
+
+      na_empresa(a) { Contact.create!(name: 'Original', email: endereco) }
+      repetido = na_empresa(a) { Contact.new(name: 'Repetido', email: endereco.upcase) }
+      outra = na_empresa(b) { Contact.new(name: 'Outra empresa', email: endereco) }
+
+      na_empresa(a) { expect(repetido).not_to be_valid }
+      expect(repetido.errors[:email]).to include('has already been taken')
+      na_empresa(b) { expect(outra).to be_valid }
+    end
+
+    it 'editar o próprio contato sem mudar o e-mail continua válido' do
+      a = empresa_nova("email-c-#{SecureRandom.hex(3)}")
+      contato = na_empresa(a) { Contact.create!(name: 'Eu', email: "eu-#{SecureRandom.hex(3)}@exemplo.invalid") }
+      na_empresa(a) do
+        contato.name = 'Eu mesmo'
+        expect(contato).to be_valid
+      end
+    end
+  end
+
   describe 'jobs em segundo plano' do
     let(:job_class) do
       Class.new(ActiveJob::Base) do

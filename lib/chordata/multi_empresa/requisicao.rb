@@ -128,6 +128,19 @@ module Chordata
         super
         @chordata_empresa_id = dados['chordata_empresa_id']
       end
+
+      private
+
+      # O Rails desserializa os argumentos (GlobalID => busca o registro no banco) ANTES de rodar os callbacks de
+      # perform. Sem empresa na sessão, o RLS esconde a linha e o job é descartado com DeserializationError
+      # (achado no teste de carga: ContactIpLookupJob, AvatarFromGravatarJob... ~1.900 jobs perdidos). Por isso a
+      # desserialização também acontece DENTRO da empresa de quem enfileirou.
+      def deserialize_arguments_if_needed
+        id = @chordata_empresa_id
+        return super unless id
+
+        EvoExtensionPoints::RuntimeContext.with_scope(id) { super }
+      end
     end
   end
 end

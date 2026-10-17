@@ -375,6 +375,27 @@ RSpec.describe 'Multi-empresa: esquema, isolamento e escopo (70 tabelas)' do
       expect(Chordata::MultiEmpresa::Current.empresa_id).to be_nil
     end
 
+    it 'desserializa os argumentos (GlobalID) DENTRO da empresa: o registro é achado mesmo com RLS e sem escopo na entrada' do
+      a = empresa_nova("job-gid-#{SecureRandom.hex(3)}")
+      contato = na_empresa(a) { Contact.create!(name: 'Job Teste GID', email: "job-#{SecureRandom.hex(3)}@exemplo.invalid") }
+      classe = Class.new(ActiveJob::Base) do
+        include Chordata::MultiEmpresa::EscopoDoJob
+        cattr_accessor :visto
+        def perform(contato)
+          self.class.visto = contato.name
+        end
+
+        def self.name = 'ProbeGidJob'
+      end
+      dados = na_empresa(a) { classe.new(contato).serialize }
+
+      job = classe.new
+      job.deserialize(dados)
+      como_app { job.perform_now }
+
+      expect(classe.visto).to eq('Job Teste GID')
+    end
+
     it 'job enfileirado sem empresa roda sem escopo (e qualquer consulta falha)' do
       dados = job_class.new.serialize
       expect(dados).not_to have_key('chordata_empresa_id')

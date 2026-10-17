@@ -65,6 +65,46 @@ module Chordata
         end
       end
 
+      LIMITE_BUSCA_MENSAGENS = 1000
+
+      # Busca global de mensagens (SearchService) e filtro de texto `q` da lista de conversas (ConversationFinder).
+      module Mensagens
+        module Servico
+          private
+
+          def filter_messages_with_like
+            return super unless Chordata::MultiEmpresa::Busca.funcao_mensagens_instalada?
+
+            ids = Message.sanitize_sql_array(['SELECT chordata_buscar_mensagens(?, ?, ?)', "%#{search_query}%", 3.months.ago, LIMITE_BUSCA_MENSAGENS])
+            message_base_query.where("messages.id IN (#{ids})").reorder('created_at DESC').page(params[:page]).per(15)
+          end
+        end
+
+        module Localizador
+          private
+
+          def apply_query_filter(query)
+            return super unless Chordata::MultiEmpresa::Busca.funcao_mensagens_instalada?
+
+            ids = Conversation.sanitize_sql_array(['SELECT chordata_conversas_com_mensagem(?, ?)', "%#{@params[:q]}%", LIMITE_BUSCA_MENSAGENS])
+            query.where("conversations.id IN (#{ids})")
+          end
+        end
+
+        def self.ligar!
+          { 'SearchService' => Servico, 'ConversationFinder' => Localizador }.each do |nome, modulo|
+            klass = nome.safe_constantize
+            klass.prepend(modulo) if klass && !klass.ancestors.include?(modulo)
+          end
+        end
+      end
+
+      def self.funcao_mensagens_instalada?
+        return @funcao_mensagens_instalada if @funcao_mensagens_instalada
+
+        @funcao_mensagens_instalada = ActiveRecord::Base.connection.select_value("SELECT to_regprocedure('chordata_buscar_mensagens(text,timestamp,integer)') IS NOT NULL") == true
+      end
+
       def self.funcao_email_instalada?
         return @funcao_email_instalada if @funcao_email_instalada
 
@@ -84,6 +124,7 @@ module Chordata
 
         klass.prepend(Contatos)
         EmailUnico.ligar!
+        Mensagens.ligar!
       end
     end
   end

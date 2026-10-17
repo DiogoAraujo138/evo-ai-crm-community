@@ -31,6 +31,8 @@ module Chordata
           conn.transaction do
             conn.execute('DROP FUNCTION IF EXISTS chordata_buscar_contatos(text)')
             conn.execute('DROP FUNCTION IF EXISTS chordata_contato_email_existe(text, uuid)')
+            conn.execute('DROP FUNCTION IF EXISTS chordata_buscar_mensagens(text, timestamp, integer)')
+            conn.execute('DROP FUNCTION IF EXISTS chordata_conversas_com_mensagem(text, integer)')
             conn.execute('DROP INDEX IF EXISTS index_contacts_on_empresa_lower_email')
             conn.execute('DROP INDEX IF EXISTS index_contacts_on_company_name_trgm')
             conn.execute('DROP FUNCTION IF EXISTS chordata_resolver_empresa(text, text, text)')
@@ -54,6 +56,8 @@ module Chordata
           conn.execute("GRANT EXECUTE ON FUNCTION chordata_resolver_empresa(text, text, text) TO #{nome_q}")
           conn.execute("GRANT EXECUTE ON FUNCTION chordata_buscar_contatos(text) TO #{nome_q}")
           conn.execute("GRANT EXECUTE ON FUNCTION chordata_contato_email_existe(text, uuid) TO #{nome_q}")
+          conn.execute("GRANT EXECUTE ON FUNCTION chordata_buscar_mensagens(text, timestamp, integer) TO #{nome_q}")
+          conn.execute("GRANT EXECUTE ON FUNCTION chordata_conversas_com_mensagem(text, integer) TO #{nome_q}")
         end
 
         private
@@ -187,6 +191,29 @@ module Chordata
             REVOKE ALL ON FUNCTION chordata_buscar_contatos(text) FROM PUBLIC;
             ALTER FUNCTION chordata_buscar_contatos(text) OWNER TO #{PAPEL_RESOLVEDOR};
             GRANT SELECT (id, empresa_id, name, email, phone_number, identifier, additional_attributes) ON contacts TO #{PAPEL_RESOLVEDOR};
+
+            -- Busca de texto em MENSAGENS (busca global e filtro `q` da lista de conversas). Com RLS, `content ILIKE` varria as
+            -- mensagens da empresa inteira (6,7 s + 2,8 s da contagem, 500 mil mensagens). Aqui o banco escolhe o melhor plano (índice
+            -- trigram para termo raro, índice de data para termo comum) com a empresa da sessão explícita, e devolve só os ids mais
+            -- recentes (p_limite) para a consulta de fora paginar.
+            CREATE OR REPLACE FUNCTION chordata_buscar_mensagens(p_padrao text, p_desde timestamp, p_limite integer)
+            RETURNS SETOF uuid LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public, pg_temp AS $fn$
+              SELECT m.id FROM messages m
+              WHERE m.empresa_id = chordata_empresa_atual() AND m.created_at >= p_desde AND m.content ILIKE p_padrao
+              ORDER BY m.created_at DESC LIMIT p_limite
+            $fn$;
+            CREATE OR REPLACE FUNCTION chordata_conversas_com_mensagem(p_padrao text, p_limite integer)
+            RETURNS SETOF uuid LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public, pg_temp AS $fn$
+              SELECT DISTINCT conversation_id FROM (
+                SELECT m.conversation_id FROM messages m
+                WHERE m.empresa_id = chordata_empresa_atual() AND m.message_type IN (0, 1) AND m.content ILIKE p_padrao
+                ORDER BY m.created_at DESC LIMIT p_limite) t
+            $fn$;
+            REVOKE ALL ON FUNCTION chordata_buscar_mensagens(text, timestamp, integer) FROM PUBLIC;
+            REVOKE ALL ON FUNCTION chordata_conversas_com_mensagem(text, integer) FROM PUBLIC;
+            ALTER FUNCTION chordata_buscar_mensagens(text, timestamp, integer) OWNER TO #{PAPEL_RESOLVEDOR};
+            ALTER FUNCTION chordata_conversas_com_mensagem(text, integer) OWNER TO #{PAPEL_RESOLVEDOR};
+            GRANT SELECT (id, empresa_id, conversation_id, message_type, content, created_at) ON messages TO #{PAPEL_RESOLVEDOR};
 
             -- Validação "e-mail único sem diferenciar maiúsculas" do modelo Contact: o upstream faz LOWER(email) = LOWER(?) e não há
             -- índice para isso; com RLS ainda varria as linhas de TODAS as empresas (1 s com 400 mil contatos), a cada criação

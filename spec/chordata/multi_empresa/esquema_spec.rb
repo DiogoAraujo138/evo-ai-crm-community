@@ -388,6 +388,40 @@ RSpec.describe 'Multi-empresa: esquema, isolamento e escopo (70 tabelas)' do
     end
   end
 
+  describe 'busca de mensagens (funções chordata_buscar_mensagens e chordata_conversas_com_mensagem)' do
+    it 'devolve só mensagens/conversas da empresa da sessão, as mais recentes primeiro, e nada sem empresa' do
+      a = empresa_nova("msg-a-#{SecureRandom.hex(3)}")
+      b = empresa_nova("msg-b-#{SecureRandom.hex(3)}")
+      marca = "zzmsg#{SecureRandom.hex(3)}"
+      ids = {}
+      [a, b].each do |emp|
+        na_empresa(emp) do
+          canal = Channel::Api.create!(identifier: "ch-#{SecureRandom.hex(4)}")
+          inbox = Inbox.create!(name: "i-#{SecureRandom.hex(3)}", channel: canal)
+          contato = Contact.create!(name: "c-#{SecureRandom.hex(3)}")
+          ci = ContactInbox.create!(contact: contato, inbox: inbox, source_id: SecureRandom.hex(4))
+          conversa = Conversation.create!(inbox: inbox, contact: contato, contact_inbox: ci)
+          m1 = conversa.messages.create!(inbox: inbox, message_type: :incoming, content: "#{marca} velha", sender: contato, created_at: 2.days.ago)
+          m2 = conversa.messages.create!(inbox: inbox, message_type: :outgoing, content: "#{marca} nova", sender: contato)
+          ids[emp] = { mensagens: [m2.id, m1.id], conversa: conversa.id }
+        end
+      end
+      padrao = conn.quote("%#{marca}%")
+
+      msgs_a = na_empresa(a) { como_app { conn.select_values("SELECT chordata_buscar_mensagens(#{padrao}, (now() - interval '1 month')::timestamp, 100)") } }
+      conv_a = na_empresa(a) { como_app { conn.select_values("SELECT chordata_conversas_com_mensagem(#{padrao}, 100)") } }
+      msgs_b = na_empresa(b) { como_app { conn.select_values("SELECT chordata_buscar_mensagens(#{padrao}, (now() - interval '1 month')::timestamp, 100)") } }
+      sem = como_app { conn.select_values("SELECT chordata_buscar_mensagens(#{padrao}, (now() - interval '1 month')::timestamp, 100)") }
+      limitada = na_empresa(a) { como_app { conn.select_values("SELECT chordata_buscar_mensagens(#{padrao}, (now() - interval '1 month')::timestamp, 1)") } }
+
+      expect(msgs_a).to eq(ids[a][:mensagens])        # só as da empresa A, mais recente primeiro
+      expect(msgs_b).to eq(ids[b][:mensagens])
+      expect(conv_a).to eq([ids[a][:conversa]])
+      expect(sem).to be_empty
+      expect(limitada).to eq([ids[a][:mensagens].first])
+    end
+  end
+
   describe 'e-mail único do contato (função chordata_contato_email_existe)' do
     before { Chordata::MultiEmpresa::Busca::EmailUnico.ligar! }
 

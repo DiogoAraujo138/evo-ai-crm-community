@@ -266,4 +266,50 @@ RSpec.describe Api::V1::PipelineItemsController, type: :controller do
       end
     end
   end
+
+  describe 'GET #available_contacts' do
+    let!(:with_phone) do
+      Contact.create!(name: 'Com Telefone', email: 'com-telefone@example.com', phone_number: '+5511988880001')
+    end
+    let!(:email_only) { Contact.create!(name: 'So Email', email: 'so-email@example.com') }
+    let!(:labeled) { Contact.create!(name: 'Etiquetado', email: 'etiquetado@example.com') }
+
+    before { labeled.update!(label_list: ['cliente']) }
+
+    def contact_names
+      response.parsed_body.fetch('data').map { |row| row['name'] }
+    end
+
+    it 'hides contacts that already belong to this pipeline' do
+      get :available_contacts, params: { pipeline_id: pipeline.id }
+
+      expect(response).to have_http_status(:ok)
+      expect(contact_names).not_to include(contact.name)
+      expect(contact_names).to include('Com Telefone', 'So Email', 'Etiquetado')
+    end
+
+    it 'filters by phone, missing email and label' do
+      get :available_contacts, params: { pipeline_id: pipeline.id, has_phone: 'true' }
+      expect(contact_names).to include('Com Telefone')
+      expect(contact_names).not_to include('So Email', 'Etiquetado')
+
+      get :available_contacts, params: { pipeline_id: pipeline.id, has_email: 'false' }
+      expect(contact_names).not_to include('So Email', 'Com Telefone', 'Etiquetado')
+
+      get :available_contacts, params: { pipeline_id: pipeline.id, labels: ['cliente'] }
+      expect(contact_names).to include('Etiquetado')
+      expect(contact_names).not_to include('Com Telefone', 'So Email')
+    end
+
+    it 'filters blocked contacts and respects the requested limit' do
+      blocked = Contact.create!(name: 'Bloqueado', email: 'bloqueado@example.com', blocked: true)
+
+      get :available_contacts, params: { pipeline_id: pipeline.id, blocked: 'true' }
+      expect(contact_names).to include(blocked.name)
+      expect(contact_names).not_to include('Com Telefone')
+
+      get :available_contacts, params: { pipeline_id: pipeline.id, limit: 1 }
+      expect(response.parsed_body.fetch('data').length).to eq(1)
+    end
+  end
 end

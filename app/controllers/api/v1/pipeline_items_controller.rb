@@ -514,26 +514,15 @@ class Api::V1::PipelineItemsController < Api::V1::BaseController
   end
 
   def available_contacts
-    # Get contacts that are NOT already in THIS specific pipeline
+    # Contacts that are NOT already in THIS specific pipeline.
     contacts_in_current_pipeline = @pipeline.pipeline_items.where.not(contact_id: nil).select(:contact_id)
 
-    current_contacts = Contact.non_groups
+    current_contacts = Contact.non_groups.where.not(contacts: { id: contacts_in_current_pipeline })
+    current_contacts = apply_available_contact_filters(current_contacts)
+    current_contacts = current_contacts
                        .includes(avatar_attachment: :blob)
-                       .where.not(contacts: { id: contacts_in_current_pipeline })
-                       .order(name: :desc)
-                       .limit(50)
-
-    # Apply search filter if provided
-    if params[:search].present?
-      search_term = "%#{params[:search]}%"
-      current_contacts = current_contacts.where(
-        'contacts.id::text ILIKE ? OR contacts.name ILIKE ? OR ' \
-        'contacts.email ILIKE ? OR contacts.phone_number ILIKE ?',
-        search_term, search_term, search_term, search_term
-      )
-    end
-
-    Rails.logger.info "Current contacts: #{current_contacts.inspect}"
+                       .order(name: :asc)
+                       .limit(available_contacts_limit)
 
     success_response(
       data: ContactSerializer.serialize_collection(current_contacts),
@@ -808,6 +797,48 @@ class Api::V1::PipelineItemsController < Api::V1::BaseController
                       else
                         @pipeline_items.order(created_at: :desc)
                       end
+  end
+
+  # Picker filters for "Adicionar Item". Absent params keep the previous
+  # search-only behavior. `has_phone` / `has_email` / `blocked` are "true" or "false".
+  def apply_available_contact_filters(contacts)
+    if params[:search].present?
+      search_term = "%#{ActiveRecord::Base.sanitize_sql_like(params[:search].to_s)}%"
+      contacts = contacts.where(
+        'contacts.id::text ILIKE ? OR contacts.name ILIKE ? OR ' \
+        'contacts.email ILIKE ? OR contacts.phone_number ILIKE ?',
+        search_term, search_term, search_term, search_term
+      )
+    end
+
+    labels = Array(params[:labels]).flat_map { |value| value.to_s.split(',') }.map(&:strip).reject(&:blank?)
+    contacts = contacts.tagged_with(labels, any: true) if labels.any?
+
+    contacts = contacts.for_company(params[:company_id]) if params[:company_id].present?
+    contacts = filter_contact_presence(contacts, :phone_number, params[:has_phone])
+    contacts = filter_contact_presence(contacts, :email, params[:has_email])
+
+    if params[:blocked].present?
+      contacts = contacts.where(blocked: ActiveModel::Type::Boolean.new.cast(params[:blocked]))
+    end
+
+    contacts
+  end
+
+  def filter_contact_presence(relation, column, flag)
+    return relation if flag.blank?
+
+    if ActiveModel::Type::Boolean.new.cast(flag)
+      relation.where.not(column => [nil, ''])
+    else
+      relation.where(column => [nil, ''])
+    end
+  end
+
+  def available_contacts_limit
+    requested = params[:limit].to_i
+    requested = 100 if requested <= 0
+    [requested, 200].min
   end
 
   def ensure_authorized_user
